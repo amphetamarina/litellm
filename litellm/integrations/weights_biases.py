@@ -21,11 +21,11 @@ try:
         # contains a (known) object attribute
         object: Literal["chat.completion", "edit", "text_completion"]
 
-        def __getitem__(self, key: K) -> V:
-            ...  # pragma: no cover
+        def __getitem__(self, key: K) -> V: ...  # noqa
 
-        def get(self, key: K, default: Optional[V] = None) -> Optional[V]:
-            ...  # pragma: no cover
+        def get(  # noqa
+            self, key: K, default: Optional[V] = None
+        ) -> Optional[V]: ...  # pragma: no cover
 
     class OpenAIRequestResponseResolver:
         def __call__(
@@ -167,19 +167,17 @@ try:
             trace = self.results_to_trace_tree(request, response, results, time_elapsed)
             return trace
 
-except:
+except Exception:
     imported_openAIResponse = False
 
 
 #### What this does ####
 #    On success, logs events to Langfuse
-import dotenv, os
-import requests
-import requests
+import os
+import traceback
 from datetime import datetime
 
-dotenv.load_dotenv()  # Loading env variables using dotenv
-import traceback
+import requests
 
 
 class WeightsBiasesLogger:
@@ -187,11 +185,11 @@ class WeightsBiasesLogger:
     def __init__(self):
         try:
             import wandb
-        except:
+        except Exception:
             raise Exception(
                 "\033[91m wandb not installed, try running 'pip install wandb' to fix this error\033[0m"
             )
-        if imported_openAIResponse == False:
+        if imported_openAIResponse is False:
             raise Exception(
                 "\033[91m wandb not installed, try running 'pip install wandb' to fix this error\033[0m"
             )
@@ -210,14 +208,14 @@ class WeightsBiasesLogger:
                 kwargs, response_obj, (end_time - start_time).total_seconds()
             )
 
-            if trace is not None:
+            if trace is not None and run is not None:
                 run.log({"trace": trace})
 
-            run.finish()
-            print_verbose(
-                f"W&B Logging Logging - final response object: {response_obj}"
-            )
-        except:
-            # traceback.print_exc()
+            if run is not None:
+                run.finish()
+                print_verbose(
+                    f"W&B Logging Logging - final response object: {response_obj}"
+                )
+        except Exception:
             print_verbose(f"W&B Logging Layer Error - {traceback.format_exc()}")
             pass

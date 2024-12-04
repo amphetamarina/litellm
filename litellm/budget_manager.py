@@ -1,8 +1,22 @@
-import os, json, time
+# +-----------------------------------------------+
+# |                                               |
+# |           NOT PROXY BUDGET MANAGER            |
+# |  proxy budget manager is in proxy_server.py   |
+# |                                               |
+# +-----------------------------------------------+
+#
+#  Thank you users! We ❤️ you! - Krrish & Ishaan
+
+import json
+import os
+import threading
+import time
+from typing import Literal, Optional, Union
+
+import requests  # type: ignore
+
 import litellm
 from litellm.utils import ModelResponse
-import requests, threading
-from typing import Optional, Union, Literal
 
 
 class BudgetManager:
@@ -11,10 +25,12 @@ class BudgetManager:
         project_name: str,
         client_type: str = "local",
         api_base: Optional[str] = None,
+        headers: Optional[dict] = None,
     ):
         self.client_type = client_type
         self.project_name = project_name
         self.api_base = api_base or "https://api.litellm.ai"
+        self.headers = headers or {"Content-Type": "application/json"}
         ## load the data or init the initial dictionaries
         self.load_data()
 
@@ -24,7 +40,7 @@ class BudgetManager:
                 import logging
 
                 logging.info(print_statement)
-        except:
+        except Exception:
             pass
 
     def load_data(self):
@@ -41,9 +57,8 @@ class BudgetManager:
         elif self.client_type == "hosted":
             # Load the user_dict from hosted db
             url = self.api_base + "/get_budget"
-            headers = {"Content-Type": "application/json"}
             data = {"project_name": self.project_name}
-            response = requests.post(url, headers=headers, json=data)
+            response = requests.post(url, headers=self.headers, json=data)
             response = response.json()
             if response["status"] == "error":
                 self.user_dict = (
@@ -199,8 +214,7 @@ class BudgetManager:
             return {"status": "success"}
         elif self.client_type == "hosted":
             url = self.api_base + "/set_budget"
-            headers = {"Content-Type": "application/json"}
             data = {"project_name": self.project_name, "user_dict": self.user_dict}
-            response = requests.post(url, headers=headers, json=data)
+            response = requests.post(url, headers=self.headers, json=data)
             response = response.json()
             return response

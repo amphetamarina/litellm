@@ -1,13 +1,15 @@
-from typing import Optional
-import litellm
-from litellm.caching import DualCache
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.integrations.custom_logger import CustomLogger
+import traceback
+
 from fastapi import HTTPException
-import json, traceback
+
+import litellm
+from litellm import verbose_logger
+from litellm.caching.caching import DualCache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UserAPIKeyAuth
 
 
-class MaxBudgetLimiter(CustomLogger):
+class _PROXY_MaxBudgetLimiter(CustomLogger):
     # Class variables or attributes
     def __init__(self):
         pass
@@ -24,9 +26,11 @@ class MaxBudgetLimiter(CustomLogger):
         call_type: str,
     ):
         try:
-            self.print_verbose(f"Inside Max Budget Limiter Pre-Call Hook")
+            self.print_verbose("Inside Max Budget Limiter Pre-Call Hook")
             cache_key = f"{user_api_key_dict.user_id}_user_api_key_user_id"
-            user_row = cache.get_cache(cache_key)
+            user_row = await cache.async_get_cache(
+                cache_key, parent_otel_span=user_api_key_dict.parent_otel_span
+            )
             if user_row is None:  # value not yet cached
                 return
             max_budget = user_row["max_budget"]
@@ -44,4 +48,8 @@ class MaxBudgetLimiter(CustomLogger):
         except HTTPException as e:
             raise e
         except Exception as e:
-            traceback.print_exc()
+            verbose_logger.exception(
+                "litellm.proxy.hooks.max_budget_limiter.py::async_pre_call_hook(): Exception occured - {}".format(
+                    str(e)
+                )
+            )

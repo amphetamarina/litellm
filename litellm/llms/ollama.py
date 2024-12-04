@@ -1,10 +1,24 @@
-import requests, types, time
-import json, uuid
+import asyncio
+import json
+import time
 import traceback
-from typing import Optional
+import types
+import uuid
+from copy import deepcopy
+from itertools import chain
+from typing import Any, Dict, List, Optional
+
+import aiohttp
+import httpx  # type: ignore
+import requests  # type: ignore
+
 import litellm
-import httpx, aiohttp, asyncio
-from .prompt_templates.factory import prompt_factory, custom_prompt
+from litellm import verbose_logger
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.utils import ModelInfo, ProviderField, StreamingChoices
+
+from .prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class OllamaError(Exception):
@@ -20,7 +34,7 @@ class OllamaError(Exception):
 
 class OllamaConfig:
     """
-    Reference: https://github.com/jmorganca/ollama/blob/main/docs/api.md#parameters
+    Reference: https://github.com/ollama/ollama/blob/main/docs/api.md#parameters
 
     The class `OllamaConfig` provides the configuration for the Ollama's API interface. Below are the parameters:
 
@@ -44,6 +58,8 @@ class OllamaConfig:
 
     - `temperature` (float): The temperature of the model. Increasing the temperature will make the model answer more creatively. Default: 0.8. Example usage: temperature 0.7
 
+    - `seed` (int): Sets the random number seed to use for generation. Setting this to a specific number will make the model generate the same text for the same prompt. Example usage: seed 42
+
     - `stop` (string[]): Sets the stop sequences to use. Example usage: stop "AI assistant:"
 
     - `tfs_z` (float): Tail free sampling is used to reduce the impact of less probable tokens from the output. A higher value (e.g., 2.0) will reduce the impact more, while a value of 1.0 disables this setting. Default: 1. Example usage: tfs_z 1
@@ -64,13 +80,15 @@ class OllamaConfig:
     mirostat_tau: Optional[float] = None
     num_ctx: Optional[int] = None
     num_gqa: Optional[int] = None
+    num_gpu: Optional[int] = None
     num_thread: Optional[int] = None
     repeat_last_n: Optional[int] = None
     repeat_penalty: Optional[float] = None
     temperature: Optional[float] = None
-    stop: Optional[
-        list
-    ] = None  # stop is a list based on this - https://github.com/jmorganca/ollama/pull/442
+    seed: Optional[int] = None
+    stop: Optional[list] = (
+        None  # stop is a list based on this - https://github.com/ollama/ollama/pull/442
+    )
     tfs_z: Optional[float] = None
     num_predict: Optional[int] = None
     top_k: Optional[int] = None
@@ -85,10 +103,12 @@ class OllamaConfig:
         mirostat_tau: Optional[float] = None,
         num_ctx: Optional[int] = None,
         num_gqa: Optional[int] = None,
+        num_gpu: Optional[int] = None,
         num_thread: Optional[int] = None,
         repeat_last_n: Optional[int] = None,
         repeat_penalty: Optional[float] = None,
         temperature: Optional[float] = None,
+        seed: Optional[int] = None,
         stop: Optional[list] = None,
         tfs_z: Optional[float] = None,
         num_predict: Optional[int] = None,
@@ -120,17 +140,146 @@ class OllamaConfig:
             and v is not None
         }
 
+    def get_required_params(self) -> List[ProviderField]:
+        """For a given provider, return it's required fields with a description"""
+        return [
+            ProviderField(
+                field_name="base_url",
+                field_type="string",
+                field_description="Your Ollama API Base",
+                field_value="http://10.10.11.249:11434",
+            )
+        ]
+
+    def get_supported_openai_params(
+        self,
+    ):
+        return [
+            "max_tokens",
+            "stream",
+            "top_p",
+            "temperature",
+            "seed",
+            "frequency_penalty",
+            "stop",
+            "response_format",
+        ]
+
+    def map_openai_params(
+        self, optional_params: dict, non_default_params: dict
+    ) -> dict:
+        for param, value in non_default_params.items():
+            if param == "max_tokens":
+                optional_params["num_predict"] = value
+            if param == "stream":
+                optional_params["stream"] = value
+            if param == "temperature":
+                optional_params["temperature"] = value
+            if param == "seed":
+                optional_params["seed"] = value
+            if param == "top_p":
+                optional_params["top_p"] = value
+            if param == "frequency_penalty":
+                optional_params["repeat_penalty"] = value
+            if param == "stop":
+                optional_params["stop"] = value
+            if param == "response_format" and isinstance(value, dict):
+                if value["type"] == "json_object":
+                    optional_params["format"] = "json"
+
+        return optional_params
+
+    def _supports_function_calling(self, ollama_model_info: dict) -> bool:
+        """
+        Check if the 'template' field in the ollama_model_info contains a 'tools' or 'function' key.
+        """
+        _template: str = str(ollama_model_info.get("template", "") or "")
+        return "tools" in _template.lower()
+
+    def _get_max_tokens(self, ollama_model_info: dict) -> Optional[int]:
+        _model_info: dict = ollama_model_info.get("model_info", {})
+
+        for k, v in _model_info.items():
+            if "context_length" in k:
+                return v
+        return None
+
+    def get_model_info(self, model: str) -> ModelInfo:
+        """
+        curl http://localhost:11434/api/show -d '{
+          "name": "mistral"
+        }'
+        """
+        if model.startswith("ollama/") or model.startswith("ollama_chat/"):
+            model = model.split("/", 1)[1]
+        api_base = get_secret_str("OLLAMA_API_BASE") or "http://localhost:11434"
+
+        try:
+            response = litellm.module_level_client.post(
+                url=f"{api_base}/api/show",
+                json={"name": model},
+            )
+        except Exception as e:
+            raise Exception(
+                f"OllamaError: Error getting model info for {model}. Set Ollama API Base via `OLLAMA_API_BASE` environment variable. Error: {e}"
+            )
+
+        model_info = response.json()
+
+        _max_tokens: Optional[int] = self._get_max_tokens(model_info)
+
+        return ModelInfo(
+            key=model,
+            litellm_provider="ollama",
+            mode="chat",
+            supported_openai_params=self.get_supported_openai_params(),
+            supports_function_calling=self._supports_function_calling(model_info),
+            input_cost_per_token=0.0,
+            output_cost_per_token=0.0,
+            max_tokens=_max_tokens,
+            max_input_tokens=_max_tokens,
+            max_output_tokens=_max_tokens,
+        )
+
+
+# ollama wants plain base64 jpeg/png files as images.  strip any leading dataURI
+# and convert to jpeg if necessary.
+def _convert_image(image):
+    import base64
+    import io
+
+    try:
+        from PIL import Image
+    except Exception:
+        raise Exception(
+            "ollama image conversion failed please run `pip install Pillow`"
+        )
+
+    orig = image
+    if image.startswith("data:"):
+        image = image.split(",")[-1]
+    try:
+        image_data = Image.open(io.BytesIO(base64.b64decode(image)))
+        if image_data.format in ["JPEG", "PNG"]:
+            return image
+    except Exception:
+        return orig
+    jpeg_image = io.BytesIO()
+    image_data.convert("RGB").save(jpeg_image, "JPEG")
+    jpeg_image.seek(0)
+    return base64.b64encode(jpeg_image.getvalue()).decode("utf-8")
+
 
 # ollama implementation
 def get_ollama_response(
-    api_base="http://localhost:11434",
-    model="llama2",
-    prompt="Why is the sky blue?",
-    optional_params=None,
-    logging_obj=None,
+    model_response: litellm.ModelResponse,
+    model: str,
+    prompt: str,
+    optional_params: dict,
+    logging_obj: Any,
+    encoding: Any,
     acompletion: bool = False,
-    model_response=None,
-    encoding=None,
+    api_base="http://localhost:11434",
 ):
     if api_base.endswith("/api/generate"):
         url = api_base
@@ -145,8 +294,20 @@ def get_ollama_response(
         ):  # completion(top_k=3) > cohere_config(top_k=3) <- allows for dynamic variables to be passed in
             optional_params[k] = v
 
-    optional_params["stream"] = optional_params.get("stream", False)
-    data = {"model": model, "prompt": prompt, **optional_params}
+    stream = optional_params.pop("stream", False)
+    format = optional_params.pop("format", None)
+    images = optional_params.pop("images", None)
+    data = {
+        "model": model,
+        "prompt": prompt,
+        "options": optional_params,
+        "stream": stream,
+    }
+    if format is not None:
+        data["format"] = format
+    if images is not None:
+        data["images"] = [_convert_image(image) for image in images]
+
     ## LOGGING
     logging_obj.pre_call(
         input=None,
@@ -159,7 +320,7 @@ def get_ollama_response(
         },
     )
     if acompletion is True:
-        if optional_params.get("stream", False) == True:
+        if stream is True:
             response = ollama_async_streaming(
                 url=url,
                 data=data,
@@ -176,12 +337,11 @@ def get_ollama_response(
                 logging_obj=logging_obj,
             )
         return response
-    elif optional_params.get("stream", False) == True:
+    elif stream is True:
         return ollama_completion_stream(url=url, data=data, logging_obj=logging_obj)
 
     response = requests.post(
-        url=f"{url}",
-        json=data,
+        url=f"{url}", json={**data, "stream": stream}, timeout=litellm.request_timeout
     )
     if response.status_code != 200:
         raise OllamaError(status_code=response.status_code, message=response.text)
@@ -200,29 +360,40 @@ def get_ollama_response(
     response_json = response.json()
 
     ## RESPONSE OBJECT
-    model_response["choices"][0]["finish_reason"] = "stop"
-    if optional_params.get("format", "") == "json":
+    model_response.choices[0].finish_reason = "stop"
+    if data.get("format", "") == "json":
+        function_call = json.loads(response_json["response"])
         message = litellm.Message(
             content=None,
             tool_calls=[
                 {
                     "id": f"call_{str(uuid.uuid4())}",
-                    "function": {"arguments": response_json["response"], "name": ""},
+                    "function": {
+                        "name": function_call["name"],
+                        "arguments": json.dumps(function_call["arguments"]),
+                    },
                     "type": "function",
                 }
             ],
         )
-        model_response["choices"][0]["message"] = message
+        model_response.choices[0].message = message  # type: ignore
+        model_response.choices[0].finish_reason = "tool_calls"
     else:
-        model_response["choices"][0]["message"]["content"] = response_json["response"]
-    model_response["created"] = int(time.time())
-    model_response["model"] = "ollama/" + model
-    prompt_tokens = response_json["prompt_eval_count"]  # type: ignore
-    completion_tokens = response_json["eval_count"]
-    model_response["usage"] = litellm.Usage(
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-        total_tokens=prompt_tokens + completion_tokens,
+        model_response.choices[0].message.content = response_json["response"]  # type: ignore
+    model_response.created = int(time.time())
+    model_response.model = "ollama/" + model
+    prompt_tokens = response_json.get("prompt_eval_count", len(encoding.encode(prompt, disallowed_special=())))  # type: ignore
+    completion_tokens = response_json.get(
+        "eval_count", len(response_json.get("message", dict()).get("content", ""))
+    )
+    setattr(
+        model_response,
+        "usage",
+        litellm.Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        ),
     )
     return model_response
 
@@ -234,7 +405,7 @@ def ollama_completion_stream(url, data, logging_obj):
         try:
             if response.status_code != 200:
                 raise OllamaError(
-                    status_code=response.status_code, message=response.text
+                    status_code=response.status_code, message=response.read()
                 )
 
             streamwrapper = litellm.CustomStreamWrapper(
@@ -243,21 +414,59 @@ def ollama_completion_stream(url, data, logging_obj):
                 custom_llm_provider="ollama",
                 logging_obj=logging_obj,
             )
-            for transformed_chunk in streamwrapper:
-                yield transformed_chunk
+            # If format is JSON, this was a function call
+            # Gather all chunks and return the function call as one delta to simplify parsing
+            if data.get("format", "") == "json":
+                first_chunk = next(streamwrapper)
+                content_chunks = []
+                for chunk in chain([first_chunk], streamwrapper):
+                    content_chunk = chunk.choices[0]
+                    if (
+                        isinstance(content_chunk, StreamingChoices)
+                        and hasattr(content_chunk, "delta")
+                        and hasattr(content_chunk.delta, "content")
+                        and content_chunk.delta.content is not None
+                    ):
+                        content_chunks.append(content_chunk.delta.content)
+                response_content = "".join(content_chunks)
+
+                function_call = json.loads(response_content)
+                delta = litellm.utils.Delta(
+                    content=None,
+                    tool_calls=[
+                        {
+                            "id": f"call_{str(uuid.uuid4())}",
+                            "function": {
+                                "name": function_call["name"],
+                                "arguments": json.dumps(function_call["arguments"]),
+                            },
+                            "type": "function",
+                        }
+                    ],
+                )
+                model_response = first_chunk
+                model_response.choices[0].delta = delta  # type: ignore
+                model_response.choices[0].finish_reason = "tool_calls"
+                yield model_response
+            else:
+                for transformed_chunk in streamwrapper:
+                    yield transformed_chunk
         except Exception as e:
             raise e
 
 
 async def ollama_async_streaming(url, data, model_response, encoding, logging_obj):
     try:
-        client = httpx.AsyncClient()
+        _async_http_client = get_async_httpx_client(
+            llm_provider=litellm.LlmProviders.OLLAMA
+        )
+        client = _async_http_client.client
         async with client.stream(
             url=f"{url}", json=data, method="POST", timeout=litellm.request_timeout
         ) as response:
             if response.status_code != 200:
                 raise OllamaError(
-                    status_code=response.status_code, message=response.text
+                    status_code=response.status_code, message=await response.aread()
                 )
 
             streamwrapper = litellm.CustomStreamWrapper(
@@ -266,13 +475,59 @@ async def ollama_async_streaming(url, data, model_response, encoding, logging_ob
                 custom_llm_provider="ollama",
                 logging_obj=logging_obj,
             )
-            async for transformed_chunk in streamwrapper:
-                yield transformed_chunk
+
+            # If format is JSON, this was a function call
+            # Gather all chunks and return the function call as one delta to simplify parsing
+            if data.get("format", "") == "json":
+                first_chunk = await anext(streamwrapper)  # noqa F821
+                chunk_choice = first_chunk.choices[0]
+                if (
+                    isinstance(chunk_choice, StreamingChoices)
+                    and hasattr(chunk_choice, "delta")
+                    and hasattr(chunk_choice.delta, "content")
+                ):
+                    first_chunk_content = chunk_choice.delta.content or ""
+                else:
+                    first_chunk_content = ""
+
+                content_chunks = []
+                async for chunk in streamwrapper:
+                    chunk_choice = chunk.choices[0]
+                    if (
+                        isinstance(chunk_choice, StreamingChoices)
+                        and hasattr(chunk_choice, "delta")
+                        and hasattr(chunk_choice.delta, "content")
+                    ):
+                        content_chunks.append(chunk_choice.delta.content)
+                response_content = first_chunk_content + "".join(content_chunks)
+                function_call = json.loads(response_content)
+                delta = litellm.utils.Delta(
+                    content=None,
+                    tool_calls=[
+                        {
+                            "id": f"call_{str(uuid.uuid4())}",
+                            "function": {
+                                "name": function_call["name"],
+                                "arguments": json.dumps(function_call["arguments"]),
+                            },
+                            "type": "function",
+                        }
+                    ],
+                )
+                model_response = first_chunk
+                model_response.choices[0].delta = delta  # type: ignore
+                model_response.choices[0].finish_reason = "tool_calls"
+                yield model_response
+            else:
+                async for transformed_chunk in streamwrapper:
+                    yield transformed_chunk
     except Exception as e:
-        traceback.print_exc()
+        raise e  # don't use verbose_logger.exception, if exception is raised
 
 
-async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
+async def ollama_acompletion(
+    url, data, model_response: litellm.ModelResponse, encoding, logging_obj
+):
     data["stream"] = False
     try:
         timeout = aiohttp.ClientTimeout(total=litellm.request_timeout)  # 10 minutes
@@ -296,54 +551,62 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
 
             response_json = await resp.json()
             ## RESPONSE OBJECT
-            model_response["choices"][0]["finish_reason"] = "stop"
+            model_response.choices[0].finish_reason = "stop"
             if data.get("format", "") == "json":
+                function_call = json.loads(response_json["response"])
                 message = litellm.Message(
                     content=None,
                     tool_calls=[
                         {
                             "id": f"call_{str(uuid.uuid4())}",
                             "function": {
-                                "arguments": response_json["response"],
-                                "name": "",
+                                "name": function_call.get(
+                                    "name", function_call.get("function", None)
+                                ),
+                                "arguments": json.dumps(function_call["arguments"]),
                             },
                             "type": "function",
                         }
                     ],
                 )
-                model_response["choices"][0]["message"] = message
+                model_response.choices[0].message = message  # type: ignore
+                model_response.choices[0].finish_reason = "tool_calls"
             else:
-                model_response["choices"][0]["message"]["content"] = response_json[
-                    "response"
-                ]
-            model_response["created"] = int(time.time())
-            model_response["model"] = "ollama/" + data["model"]
-            prompt_tokens = response_json["prompt_eval_count"]  # type: ignore
-            completion_tokens = response_json["eval_count"]
-            model_response["usage"] = litellm.Usage(
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=prompt_tokens + completion_tokens,
+                model_response.choices[0].message.content = response_json["response"]  # type: ignore
+            model_response.created = int(time.time())
+            model_response.model = "ollama/" + data["model"]
+            prompt_tokens = response_json.get("prompt_eval_count", len(encoding.encode(data["prompt"], disallowed_special=())))  # type: ignore
+            completion_tokens = response_json.get(
+                "eval_count",
+                len(response_json.get("message", dict()).get("content", "")),
+            )
+            setattr(
+                model_response,
+                "usage",
+                litellm.Usage(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=prompt_tokens + completion_tokens,
+                ),
             )
             return model_response
     except Exception as e:
-        traceback.print_exc()
-        raise e
+        raise e  # don't use verbose_logger.exception, if exception is raised
 
 
 async def ollama_aembeddings(
-    api_base="http://localhost:11434",
-    model="llama2",
-    prompt="Why is the sky blue?",
-    optional_params=None,
-    logging_obj=None,
-    model_response=None,
-    encoding=None,
+    api_base: str,
+    model: str,
+    prompts: List[str],
+    model_response: litellm.EmbeddingResponse,
+    optional_params: dict,
+    logging_obj: Any,
+    encoding: Any,
 ):
-    if api_base.endswith("/api/embeddings"):
+    if api_base.endswith("/api/embed"):
         url = api_base
     else:
-        url = f"{api_base}/api/embeddings"
+        url = f"{api_base}/api/embed"
 
     ## Load Config
     config = litellm.OllamaConfig.get_config()
@@ -353,51 +616,84 @@ async def ollama_aembeddings(
         ):  # completion(top_k=3) > cohere_config(top_k=3) <- allows for dynamic variables to be passed in
             optional_params[k] = v
 
-    data = {
-        "model": model,
-        "prompt": prompt,
-    }
-    ## LOGGING
-    logging_obj.pre_call(
-        input=None,
-        api_key=None,
-        additional_args={"api_base": url, "complete_input_dict": data, "headers": {}},
-    )
+    data: Dict[str, Any] = {"model": model, "input": prompts}
+    special_optional_params = ["truncate", "options", "keep_alive"]
+
+    for k, v in optional_params.items():
+        if k in special_optional_params:
+            data[k] = v
+        else:
+            # Ensure "options" is a dictionary before updating it
+            data.setdefault("options", {})
+            if isinstance(data["options"], dict):
+                data["options"].update({k: v})
+    total_input_tokens = 0
+    output_data = []
+
     timeout = aiohttp.ClientTimeout(total=litellm.request_timeout)  # 10 minutes
     async with aiohttp.ClientSession(timeout=timeout) as session:
+        ## LOGGING
+        logging_obj.pre_call(
+            input=None,
+            api_key=None,
+            additional_args={
+                "api_base": url,
+                "complete_input_dict": data,
+                "headers": {},
+            },
+        )
+
         response = await session.post(url, json=data)
 
         if response.status != 200:
             text = await response.text()
             raise OllamaError(status_code=response.status, message=text)
 
-        ## LOGGING
-        logging_obj.post_call(
-            input=prompt,
-            api_key="",
-            original_response=response.text,
-            additional_args={
-                "headers": None,
-                "api_base": api_base,
-            },
-        )
-
         response_json = await response.json()
-        embeddings = response_json["embedding"]
-        ## RESPONSE OBJECT
-        output_data = []
-        for idx, embedding in enumerate(embeddings):
-            output_data.append(
-                {"object": "embedding", "index": idx, "embedding": embedding}
-            )
-        model_response["object"] = "list"
-        model_response["data"] = output_data
-        model_response["model"] = model
 
-        input_tokens = len(encoding.encode(prompt))
+        embeddings: List[List[float]] = response_json["embeddings"]
+        for idx, emb in enumerate(embeddings):
+            output_data.append({"object": "embedding", "index": idx, "embedding": emb})
 
-        model_response["usage"] = {
-            "prompt_tokens": input_tokens,
-            "total_tokens": input_tokens,
-        }
-        return model_response
+        input_tokens = response_json.get("prompt_eval_count") or len(
+            encoding.encode("".join(prompt for prompt in prompts))
+        )
+        total_input_tokens += input_tokens
+
+    model_response.object = "list"
+    model_response.data = output_data
+    model_response.model = "ollama/" + model
+    setattr(
+        model_response,
+        "usage",
+        litellm.Usage(
+            prompt_tokens=total_input_tokens,
+            completion_tokens=total_input_tokens,
+            total_tokens=total_input_tokens,
+            prompt_tokens_details=None,
+            completion_tokens_details=None,
+        ),
+    )
+    return model_response
+
+
+def ollama_embeddings(
+    api_base: str,
+    model: str,
+    prompts: list,
+    optional_params: dict,
+    model_response: litellm.EmbeddingResponse,
+    logging_obj: Any,
+    encoding=None,
+):
+    return asyncio.run(
+        ollama_aembeddings(
+            api_base=api_base,
+            model=model,
+            prompts=prompts,
+            model_response=model_response,
+            optional_params=optional_params,
+            logging_obj=logging_obj,
+            encoding=encoding,
+        )
+    )

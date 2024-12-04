@@ -1,4 +1,4 @@
-# Track Token Usage (Streaming) 
+# Custom Callback
 
 ### Step 1 - Create your custom `litellm` callback class
 We use `litellm.integrations.custom_logger` for this, **more details about litellm custom callbacks [here](https://docs.litellm.ai/docs/observability/custom_callback)**
@@ -8,6 +8,7 @@ Define your custom callback class in a python file.
 ```python
 from litellm.integrations.custom_logger import CustomLogger
 import litellm
+import logging
 
 # This file includes the custom callbacks for LiteLLM Proxy
 # Once defined, these can be passed in proxy_config.yaml
@@ -25,33 +26,11 @@ class MyCustomHandler(CustomLogger):
                     datefmt='%Y-%m-%d %H:%M:%S'
             )
 
-            # check if it has collected an entire stream response
-            if "complete_streaming_response" in kwargs:
-                # for tracking streaming cost we pass the "messages" and the output_text to litellm.completion_cost 
-                completion_response=kwargs["complete_streaming_response"]
-                input_text = kwargs["messages"]
-                output_text = completion_response["choices"][0]["message"]["content"]
-                response_cost = litellm.completion_cost(
-                    model = kwargs["model"],
-                    messages = input_text,
-                    completion=output_text
-                )
-                print("streaming response_cost", response_cost)
-                logging.info(f"Model {kwargs['model']} Cost: ${response_cost:.8f}")
-
-            # for non streaming responses
-            else:
-                # we pass the completion_response obj
-                if kwargs["stream"] != True:
-                    response_cost = litellm.completion_cost(completion_response=completion_response)
-                    print("regular response_cost", response_cost)
-                    logging.info(f"Model {completion_response.model} Cost: ${response_cost:.8f}")
+            response_cost: Optional[float] = kwargs.get("response_cost", None)
+            print("regular response_cost", response_cost)
+            logging.info(f"Model {response_obj.model} Cost: ${response_cost:.8f}")
         except:
             pass
-
-
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time): 
-        print(f"On Async Failure")
 
 proxy_handler_instance = MyCustomHandler()
 
@@ -87,7 +66,7 @@ litellm --config proxy_config.yaml
 ```
 
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+curl --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Authorization: Bearer sk-1234' \
     --data ' {
     "model": "gpt-3.5-turbo",

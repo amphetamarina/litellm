@@ -1,87 +1,52 @@
-# 🔥 Load Test LiteLLM 
+import Image from '@theme/IdealImage';
 
-Here is a script to load test LiteLLM vs OpenAI 
+# LiteLLM Proxy - Locust Load Test
 
-```python
-from openai import AsyncOpenAI, AsyncAzureOpenAI
-import random, uuid
-import time, asyncio, litellm
-# import logging
-# logging.basicConfig(level=logging.DEBUG)
-#### LITELLM PROXY #### 
-litellm_client = AsyncOpenAI(
-    api_key="sk-1234", # [CHANGE THIS]
-    base_url="http://0.0.0.0:8000"
-)
+## Locust Load Test LiteLLM Proxy 
 
-#### AZURE OPENAI CLIENT #### 
-client = AsyncAzureOpenAI(
-    api_key="my-api-key", # [CHANGE THIS]
-    azure_endpoint="my-api-base", # [CHANGE THIS]
-    api_version="2023-07-01-preview" 
-)
+1. Add `fake-openai-endpoint` to your proxy config.yaml and start your litellm proxy
+litellm provides a free hosted `fake-openai-endpoint` you can load test against
 
-
-#### LITELLM ROUTER #### 
-model_list = [
-  {
-    "model_name": "azure-canada",
-    "litellm_params": {
-      "model": "azure/my-azure-deployment-name", # [CHANGE THIS]
-      "api_key": "my-api-key", # [CHANGE THIS]
-      "api_base": "my-api-base", # [CHANGE THIS]
-      "api_version": "2023-07-01-preview"
-    }
-  }
-]
-
-router = litellm.Router(model_list=model_list)
-
-async def openai_completion():
-  try:
-    response = await client.chat.completions.create(
-              model="gpt-35-turbo",
-              messages=[{"role": "user", "content": f"This is a test: {uuid.uuid4()}"}],
-              stream=True
-          )
-    return response
-  except Exception as e:
-    print(e)
-    return None
-  
-
-async def router_completion():
-  try:
-    response = await router.acompletion(
-              model="azure-canada", # [CHANGE THIS]
-              messages=[{"role": "user", "content": f"This is a test: {uuid.uuid4()}"}],
-              stream=True
-          )
-    return response
-  except Exception as e:
-    print(e)
-    return None
-
-async def proxy_completion_non_streaming():
-  try:
-    response = await litellm_client.chat.completions.create(
-              model="sagemaker-models", # [CHANGE THIS] (if you call it something else on your proxy)
-              messages=[{"role": "user", "content": f"This is a test: {uuid.uuid4()}"}],
-          )
-    return response
-  except Exception as e:
-    print(e)
-    return None
-
-async def loadtest_fn():
-    start = time.time()
-    n = 500  # Number of concurrent tasks
-    tasks = [proxy_completion_non_streaming() for _ in range(n)]
-    chat_completions = await asyncio.gather(*tasks)
-    successful_completions = [c for c in chat_completions if c is not None]
-    print(n, time.time() - start, len(successful_completions))
-
-# Run the event loop to execute the async function
-asyncio.run(loadtest_fn())
-
+```yaml
+model_list:
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
 ```
+
+2. `pip install locust`
+
+3. Create a file called `locustfile.py` on your local machine. Copy the contents from the litellm load test located [here](https://github.com/BerriAI/litellm/blob/main/.github/workflows/locustfile.py)
+
+4. Start locust
+  Run `locust` in the same directory as your `locustfile.py` from step 2
+
+  ```shell
+  locust
+  ```
+
+  Output on terminal 
+  ```
+  [2024-03-15 07:19:58,893] Starting web interface at http://0.0.0.0:8089
+  [2024-03-15 07:19:58,898] Starting Locust 2.24.0
+  ```
+
+5. Run Load test on locust
+
+  Head to the locust UI on http://0.0.0.0:8089
+
+  Set Users=100, Ramp Up Users=10, Host=Base URL of your LiteLLM Proxy
+
+  <Image img={require('../img/locust_load_test.png')} />
+
+6. Expected Results
+
+  Expect to see the following response times for `/health/readiness` 
+  Median → /health/readiness is `150ms`
+
+  Avg →  /health/readiness is `219ms`
+
+  <Image img={require('../img/litellm_load_test.png')} />
+

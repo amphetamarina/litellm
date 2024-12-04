@@ -1,12 +1,16 @@
-import os, types
 import json
-from enum import Enum
-import requests
+import os
 import time
+import types
+from enum import Enum
 from typing import Callable, Optional
+
+import requests  # type: ignore
+
 import litellm
 from litellm.utils import ModelResponse, Usage
-from .prompt_templates.factory import prompt_factory, custom_prompt
+
+from .prompt_templates.factory import custom_prompt, prompt_factory
 
 
 class PetalsError(Exception):
@@ -41,9 +45,9 @@ class PetalsConfig:
     """
 
     max_length: Optional[int] = None
-    max_new_tokens: Optional[
-        int
-    ] = litellm.max_tokens  # petals requires max tokens to be set
+    max_new_tokens: Optional[int] = (
+        litellm.max_tokens
+    )  # petals requires max tokens to be set
     do_sample: Optional[bool] = None
     temperature: Optional[float] = None
     top_k: Optional[int] = None
@@ -94,7 +98,7 @@ def completion(
     print_verbose: Callable,
     encoding,
     logging_obj,
-    optional_params=None,
+    optional_params: dict,
     stream=False,
     litellm_params=None,
     logger_fn=None,
@@ -119,6 +123,7 @@ def completion(
     else:
         prompt = prompt_factory(model=model, messages=messages)
 
+    output_text: Optional[str] = None
     if api_base:
         ## LOGGING
         logging_obj.pre_call(
@@ -151,9 +156,9 @@ def completion(
     else:
         try:
             import torch
-            from transformers import AutoTokenizer
             from petals import AutoDistributedModelForCausalLM  # type: ignore
-        except:
+            from transformers import AutoTokenizer
+        except Exception:
             raise Exception(
                 "Importing torch, transformers, petals failed\nTry pip installing petals \npip install git+https://github.com/bigscience-workshop/petals"
             )
@@ -188,22 +193,22 @@ def completion(
         ## RESPONSE OBJECT
         output_text = tokenizer.decode(outputs[0])
 
-    if len(output_text) > 0:
-        model_response["choices"][0]["message"]["content"] = output_text
+    if output_text is not None and len(output_text) > 0:
+        model_response.choices[0].message.content = output_text  # type: ignore
 
     prompt_tokens = len(encoding.encode(prompt))
     completion_tokens = len(
         encoding.encode(model_response["choices"][0]["message"].get("content"))
     )
 
-    model_response["created"] = int(time.time())
-    model_response["model"] = model
+    model_response.created = int(time.time())
+    model_response.model = model
     usage = Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=prompt_tokens + completion_tokens,
     )
-    model_response.usage = usage
+    setattr(model_response, "usage", usage)
     return model_response
 
 

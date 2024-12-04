@@ -1,11 +1,14 @@
-import os, types, traceback, copy
-import json
-from enum import Enum
+import copy
 import time
+import traceback
+import types
 from typing import Callable, Optional
-from litellm.utils import ModelResponse, get_secret, Choices, Message, Usage
+
+import httpx
+
 import litellm
-import sys, httpx
+from litellm import verbose_logger
+from litellm.utils import Choices, Message, ModelResponse, Usage
 
 
 class PalmError(Exception):
@@ -93,13 +96,13 @@ def completion(
     api_key,
     encoding,
     logging_obj,
-    optional_params=None,
+    optional_params: dict,
     litellm_params=None,
     logger_fn=None,
 ):
     try:
-        import google.generativeai as palm
-    except:
+        import google.generativeai as palm  # type: ignore
+    except Exception:
         raise Exception(
             "Importing google.generativeai failed, please run 'pip install -q google-generativeai"
         )
@@ -163,16 +166,15 @@ def completion(
                 message_obj = Message(content=None)
             choice_obj = Choices(index=idx + 1, message=message_obj)
             choices_list.append(choice_obj)
-        model_response["choices"] = choices_list
-    except Exception as e:
-        traceback.print_exc()
+        model_response.choices = choices_list  # type: ignore
+    except Exception:
         raise PalmError(
             message=traceback.format_exc(), status_code=response.status_code
         )
 
     try:
         completion_response = model_response["choices"][0]["message"].get("content")
-    except:
+    except Exception:
         raise PalmError(
             status_code=400,
             message=f"No response received. Original response - {response}",
@@ -184,14 +186,14 @@ def completion(
         encoding.encode(model_response["choices"][0]["message"].get("content", ""))
     )
 
-    model_response["created"] = int(time.time())
-    model_response["model"] = "palm/" + model
+    model_response.created = int(time.time())
+    model_response.model = "palm/" + model
     usage = Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=prompt_tokens + completion_tokens,
     )
-    model_response.usage = usage
+    setattr(model_response, "usage", usage)
     return model_response
 
 
