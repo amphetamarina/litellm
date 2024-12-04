@@ -1460,7 +1460,6 @@ class VertexLLM(VertexBase):
                 custom_llm_provider="vertex_ai_beta",
                 logging_obj=logging_obj,
             )
-
             return streaming_response
         ## COMPLETION CALL ##
 
@@ -1512,6 +1511,7 @@ class ModelResponseIterator:
             text = ""
             tool_use: Optional[ChatCompletionToolCallChunk] = None
             finish_reason = ""
+            grounding_metadata: Optional[Any] = []
             usage: Optional[ChatCompletionUsageBlock] = None
             _candidates: Optional[List[Candidates]] = processed_chunk.get("candidates")
             gemini_chunk: Optional[Candidates] = None
@@ -1547,8 +1547,10 @@ class ModelResponseIterator:
                 )
                 ## DO NOT SET 'is_finished' = True
                 ## GEMINI SETS FINISHREASON ON EVERY CHUNK!
-
-            if "usageMetadata" in processed_chunk:
+            
+            if "groundingMetadata" in gemini_chunk:
+                grounding_metadata = gemini_chunk["groundingMetadata"]
+            if "usageMetadata" in gemini_chunk:
                 usage = ChatCompletionUsageBlock(
                     prompt_tokens=processed_chunk["usageMetadata"].get(
                         "promptTokenCount", 0
@@ -1567,6 +1569,7 @@ class ModelResponseIterator:
                 is_finished=False,
                 finish_reason=finish_reason,
                 usage=usage,
+                provider_specific_fields={"grounding_metadata": grounding_metadata},
                 index=0,
             )
             return returned_chunk
