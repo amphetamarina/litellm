@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "cyborgmarina-litellm"
-version = "0.1.1"
+version = "0.1.2"
 description = "A fork of BerriAI's litellm library, with specific features needed for some projects."
 authors = ["Marina Rosa"]
 license = "MIT"
