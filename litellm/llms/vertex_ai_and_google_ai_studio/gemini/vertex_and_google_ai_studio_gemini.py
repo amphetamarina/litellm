@@ -402,6 +402,7 @@ class VertexGeminiConfig:
     def _map_function(self, value: List[dict]) -> List[Tools]:
         gtool_func_declarations = []
         googleSearchRetrieval: Optional[dict] = None
+        googleSearch: Optional[dict] = None
         code_execution: Optional[dict] = None
         # remove 'additionalProperties' from tools
         value = _remove_additional_properties(value)
@@ -433,6 +434,8 @@ class VertexGeminiConfig:
             # check if grounding
             if tool.get("googleSearchRetrieval", None) is not None:
                 googleSearchRetrieval = tool["googleSearchRetrieval"]
+            elif tool.get("google_search", None) is not None:
+                googleSearch = tool["google_search"]
             elif tool.get("code_execution", None) is not None:
                 code_execution = tool["code_execution"]
             elif openai_function_object is not None:
@@ -459,6 +462,8 @@ class VertexGeminiConfig:
             _tools["googleSearchRetrieval"] = googleSearchRetrieval
         if code_execution is not None:
             _tools["code_execution"] = code_execution
+        if googleSearch is not None:
+            _tools["google_search"] = googleSearch
         return [_tools]
 
     def _map_response_schema(self, value: dict) -> dict:
