@@ -730,3 +730,35 @@ def test_stream_chunk_builder_openai_audio_output_usage():
             assert response_usage_value.model_dump(exclude_none=True) == v
         else:
             assert response_usage_value == v
+
+
+def test_stream_chunk_builder_empty_initial_chunk():
+    from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
+        ChunkProcessor,
+    )
+
+    chunks = [
+        {"id": ""},
+        {"id": "1"},
+        {"id": "1"},
+    ]
+
+    id = ChunkProcessor._get_chunk_id(chunks)
+    assert id == "1"
+
+
+import json
+
+
+def get_current_weather(location, unit="fahrenheit"):
+    """Get the current weather in a given location"""
+    if "tokyo" in location.lower():
+        return json.dumps({"location": "Tokyo", "temperature": "10", "unit": "celsius"})
+    elif "san francisco" in location.lower():
+        return json.dumps(
+            {"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}
+        )
+    elif "paris" in location.lower():
+        return json.dumps({"location": "Paris", "temperature": "22", "unit": "celsius"})
+    else:
+        return json.dumps({"location": location, "temperature": "unknown"})

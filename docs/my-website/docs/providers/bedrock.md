@@ -11,6 +11,12 @@ pip install boto3>=1.28.57
 
 :::info
 
+For **Amazon Nova Models**: Bump to v1.53.5+
+
+:::
+
+:::info
+
 LiteLLM uses boto3 to handle authentication. All these options are supported - https://boto3.amazonaws.com/v1/documentation/api/latest/guide/credentials.html#credentials.
 
 :::
@@ -708,6 +714,12 @@ print(response)
 
 ## Set 'converse' / 'invoke' route 
 
+:::info
+
+Supported from LiteLLM Version `v1.53.5`
+
+:::
+
 LiteLLM defaults to the `invoke` route. LiteLLM uses the `converse` route for Bedrock models that support it.
 
 To explicitly set the route, do `bedrock/converse/<model>` or `bedrock/invoke/<model>`.
@@ -1284,3 +1296,80 @@ print(f"response: {response}")
 | Stable Diffusion 3 - v0 | `embedding(model="bedrock/stability.stability.sd3-large-v1:0", prompt=prompt)` |
 | Stable Diffusion - v0 | `embedding(model="bedrock/stability.stable-diffusion-xl-v0", prompt=prompt)` |
 | Stable Diffusion - v0 | `embedding(model="bedrock/stability.stable-diffusion-xl-v1", prompt=prompt)` |
+
+
+## Rerank API 
+
+Use Bedrock's Rerank API in the Cohere `/rerank` format. 
+
+Supported Cohere Rerank Params
+- `model` - the foundation model ARN
+- `query` - the query to rerank against
+- `documents` - the list of documents to rerank
+- `top_n` - the number of results to return
+
+<Tabs>
+<TabItem label="SDK" value="sdk">
+
+```python
+from litellm import rerank
+import os 
+
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+response = rerank(
+    model="bedrock/arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0", # provide the model ARN - get this here https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/bedrock/client/list_foundation_models.html
+    query="hello",
+    documents=["hello", "world"],
+    top_n=2,
+)
+
+print(response)
+```
+
+</TabItem>
+<TabItem label="PROXY" value="proxy">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: bedrock-rerank
+      litellm_params:
+        model: bedrock/arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0
+        aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+        aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+        aws_region_name: os.environ/AWS_REGION_NAME
+```
+
+2. Start proxy server
+
+```bash
+litellm --config config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+3. Test it! 
+
+```bash
+curl http://0.0.0.0:4000/rerank \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "bedrock-rerank",
+    "query": "What is the capital of the United States?",
+    "documents": [
+        "Carson City is the capital city of the American state of Nevada.",
+        "The Commonwealth of the Northern Mariana Islands is a group of islands in the Pacific Ocean. Its capital is Saipan.",
+        "Washington, D.C. is the capital of the United States.",
+        "Capital punishment has existed in the United States since before it was a country."
+    ],
+    "top_n": 3
+  }'
+```
+
+</TabItem>
+</Tabs>

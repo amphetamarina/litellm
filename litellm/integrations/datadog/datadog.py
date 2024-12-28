@@ -16,11 +16,10 @@ For batching specific details see CustomBatchLogger class
 import asyncio
 import datetime
 import os
-import sys
 import traceback
 import uuid
 from datetime import datetime as datetimeObj
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, List, Optional, Union
 
 from httpx import Response
 
@@ -32,7 +31,6 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.integrations.datadog import *
 from litellm.types.services import ServiceLoggerPayload
 from litellm.types.utils import StandardLoggingPayload
@@ -178,9 +176,6 @@ class DataDogLogger(CustomBatchLogger):
         - instantly logs it on DD API
         """
         try:
-            verbose_logger.debug(
-                "Datadog: Logging - Enters logging function for model %s", kwargs
-            )
             if litellm.datadog_use_v1 is True:
                 dd_payload = self._create_v0_logging_payload(
                     kwargs=kwargs,
@@ -224,6 +219,7 @@ class DataDogLogger(CustomBatchLogger):
         pass
 
     async def _log_async_event(self, kwargs, response_obj, start_time, end_time):
+
         dd_payload = self.create_datadog_logging_payload(
             kwargs=kwargs,
             response_obj=response_obj,
@@ -276,7 +272,7 @@ class DataDogLogger(CustomBatchLogger):
 
         # Build the initial payload
         truncate_standard_logging_payload_content(standard_logging_object)
-        json_payload = json.dumps(standard_logging_object)
+        json_payload = json.dumps(standard_logging_object, default=str)
 
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
 
@@ -302,7 +298,7 @@ class DataDogLogger(CustomBatchLogger):
         import gzip
         import json
 
-        compressed_data = gzip.compress(json.dumps(data).encode("utf-8"))
+        compressed_data = gzip.compress(json.dumps(data, default=str).encode("utf-8"))
         response = await self.async_client.post(
             url=self.intake_url,
             data=compressed_data,  # type: ignore
@@ -333,7 +329,7 @@ class DataDogLogger(CustomBatchLogger):
             import json
 
             _payload_dict = payload.model_dump()
-            _dd_message_str = json.dumps(_payload_dict)
+            _dd_message_str = json.dumps(_payload_dict, default=str)
             _dd_payload = DatadogPayload(
                 ddsource="litellm",
                 ddtags="",
@@ -437,7 +433,7 @@ class DataDogLogger(CustomBatchLogger):
             "metadata": clean_metadata,
         }
 
-        json_payload = json.dumps(payload)
+        json_payload = json.dumps(payload, default=str)
 
         verbose_logger.debug("Datadog: Logger - Logging payload = %s", json_payload)
 
@@ -453,7 +449,7 @@ class DataDogLogger(CustomBatchLogger):
 
     @staticmethod
     def _get_datadog_tags():
-        return f"env:{os.getenv('DD_ENV', 'unknown')},service:{os.getenv('DD_SERVICE', 'litellm')},version:{os.getenv('DD_VERSION', 'unknown')}"
+        return f"env:{os.getenv('DD_ENV', 'unknown')},service:{os.getenv('DD_SERVICE', 'litellm')},version:{os.getenv('DD_VERSION', 'unknown')},HOSTNAME:{DataDogLogger._get_datadog_hostname()},POD_NAME:{os.getenv('POD_NAME', 'unknown')}"
 
     @staticmethod
     def _get_datadog_source():
@@ -465,8 +461,12 @@ class DataDogLogger(CustomBatchLogger):
 
     @staticmethod
     def _get_datadog_hostname():
-        return ""
+        return os.getenv("HOSTNAME", "")
 
     @staticmethod
     def _get_datadog_env():
         return os.getenv("DD_ENV", "unknown")
+
+    @staticmethod
+    def _get_datadog_pod_name():
+        return os.getenv("POD_NAME", "unknown")

@@ -1,8 +1,6 @@
 import json
-import os
-import threading
 import traceback
-from typing import Optional
+from typing import Any, Optional
 
 import httpx
 
@@ -14,17 +12,14 @@ from ..exceptions import (
     APIError,
     AuthenticationError,
     BadRequestError,
-    BudgetExceededError,
     ContentPolicyViolationError,
     ContextWindowExceededError,
     NotFoundError,
-    OpenAIError,
     PermissionDeniedError,
     RateLimitError,
     ServiceUnavailableError,
     Timeout,
     UnprocessableEntityError,
-    UnsupportedParamsError,
 )
 
 
@@ -87,6 +82,41 @@ def _get_response_headers(original_exception: Exception) -> Optional[httpx.Heade
         return None
 
     return _response_headers
+
+
+import re
+
+
+def extract_and_raise_litellm_exception(
+    response: Optional[Any],
+    error_str: str,
+    model: str,
+    custom_llm_provider: str,
+):
+    """
+    Covers scenario where litellm sdk calling proxy.
+
+    Enables raising the special errors raised by litellm, eg. ContextWindowExceededError.
+
+    Relevant Issue: https://github.com/BerriAI/litellm/issues/7259
+    """
+    pattern = r"litellm\.\w+Error"
+
+    # Search for the exception in the error string
+    match = re.search(pattern, error_str)
+
+    # Extract the exception if found
+    if match:
+        exception_name = match.group(0)
+        exception_name = exception_name.strip().replace("litellm.", "")
+        raised_exception_obj = getattr(litellm, exception_name, None)
+        if raised_exception_obj:
+            raise raised_exception_obj(
+                message=error_str,
+                llm_provider=custom_llm_provider,
+                model=model,
+                response=response,
+            )
 
 
 def exception_type(  # type: ignore  # noqa: PLR0915
@@ -189,7 +219,11 @@ def exception_type(  # type: ignore  # noqa: PLR0915
             #################### Start of Provider Exception mapping ####################
             ################################################################################
 
-            if "Request Timeout Error" in error_str or "Request timed out" in error_str:
+            if (
+                "Request Timeout Error" in error_str
+                or "Request timed out" in error_str
+                or "Timed out generating response" in error_str
+            ):
                 exception_mapping_worked = True
                 raise Timeout(
                     message=f"APITimeoutError - Request timed out. \nerror_str: {error_str}",
@@ -198,6 +232,15 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     litellm_debug_info=extra_information,
                 )
 
+            if (
+                custom_llm_provider == "litellm_proxy"
+            ):  # handle special case where calling litellm proxy + exception str contains error message
+                extract_and_raise_litellm_exception(
+                    response=getattr(original_exception, "response", None),
+                    error_str=error_str,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                )
             if (
                 custom_llm_provider == "openai"
                 or custom_llm_provider == "text-completion-openai"
@@ -286,7 +329,10 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         response=getattr(original_exception, "response", None),
                         litellm_debug_info=extra_information,
                     )
-                elif "Web server is returning an unknown error" in error_str:
+                elif (
+                    "Web server is returning an unknown error" in error_str
+                    or "The server had an error processing your request." in error_str
+                ):
                     exception_mapping_worked = True
                     raise litellm.InternalServerError(
                         message=f"{exception_provider} - {message}",
@@ -649,6 +695,13 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     exception_mapping_worked = True
                     raise litellm.InternalServerError(
                         message=f"{custom_llm_provider}Exception - {original_exception.message}",
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                    )
+                elif "model_no_support_for_function" in error_str:
+                    exception_mapping_worked = True
+                    raise BadRequestError(
+                        message=f"{custom_llm_provider}Exception - Use 'watsonx_text' route instead. IBM WatsonX does not support `/text/chat` endpoint. - {error_str}",
                         llm_provider=custom_llm_provider,
                         model=model,
                     )

@@ -3,7 +3,6 @@
 import copy
 import os
 import traceback
-import types
 from collections.abc import MutableMapping, MutableSequence, MutableSet
 from typing import TYPE_CHECKING, Any, Dict, Optional, cast
 
@@ -13,6 +12,7 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
+from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse import *
 from litellm.types.utils import StandardLoggingPayload
@@ -56,6 +56,8 @@ class LangFuseLogger:
         self.langfuse_flush_interval = (
             os.getenv("LANGFUSE_FLUSH_INTERVAL") or flush_interval
         )
+        http_client = _get_httpx_client()
+        self.langfuse_client = http_client.client
 
         parameters = {
             "public_key": self.public_key,
@@ -64,6 +66,7 @@ class LangFuseLogger:
             "release": self.langfuse_release,
             "debug": self.langfuse_debug,
             "flush_interval": self.langfuse_flush_interval,  # flush interval in seconds
+            "httpx_client": self.langfuse_client,
         }
 
         if Version(langfuse.version.__version__) >= Version("2.6.0"):
@@ -145,12 +148,7 @@ class LangFuseLogger:
 
         return metadata
 
-    # def log_error(kwargs, response_obj, start_time, end_time):
-    #     generation = trace.generation(
-    #         level ="ERROR" # can be any of DEBUG, DEFAULT, WARNING or ERROR
-    #         status_message='error' # can be any string (e.g. stringified stack trace or error body)
-    #     )
-    def log_event(  # noqa: PLR0915
+    def _old_log_event(  # noqa: PLR0915
         self,
         kwargs,
         response_obj,
@@ -164,7 +162,7 @@ class LangFuseLogger:
         # Method definition
 
         try:
-            print_verbose(
+            verbose_logger.debug(
                 f"Langfuse Logging - Enters logging function for model {kwargs}"
             )
 
@@ -257,7 +255,9 @@ class LangFuseLogger:
             ):
                 input = prompt
                 output = response_obj.get("response", "")
-            print_verbose(f"OUTPUT IN LANGFUSE: {output}; original: {response_obj}")
+            verbose_logger.debug(
+                f"OUTPUT IN LANGFUSE: {output}; original: {response_obj}"
+            )
             trace_id = None
             generation_id = None
             if self._is_langfuse_v2():
@@ -288,7 +288,7 @@ class LangFuseLogger:
                     input,
                     response_obj,
                 )
-            print_verbose(
+            verbose_logger.debug(
                 f"Langfuse Layer Logging - final response object: {response_obj}"
             )
             verbose_logger.info("Langfuse Layer Logging - logging success")
@@ -441,7 +441,7 @@ class LangFuseLogger:
     ) -> tuple:
         import langfuse
 
-        print_verbose("Langfuse Layer Logging - logging to langfuse v2")
+        verbose_logger.debug("Langfuse Layer Logging - logging to langfuse v2")
 
         try:
             metadata = self._prepare_metadata(metadata)
@@ -454,6 +454,18 @@ class LangFuseLogger:
             supports_completion_start_time = langfuse_version >= Version("2.7.3")
 
             tags = metadata.pop("tags", []) if supports_tags else []
+
+            standard_logging_object: Optional[StandardLoggingPayload] = cast(
+                Optional[StandardLoggingPayload],
+                kwargs.get("standard_logging_object", None),
+            )
+
+            if standard_logging_object is None:
+                end_user_id = None
+            else:
+                end_user_id = standard_logging_object["metadata"].get(
+                    "user_api_key_end_user_id", None
+                )
 
             # Clean Metadata before logging - never log raw metadata
             # the raw metadata can contain circular references which leads to infinite recursion
@@ -538,7 +550,7 @@ class LangFuseLogger:
                     "version": clean_metadata.pop(
                         "trace_version", clean_metadata.get("version", None)
                     ),  # If provided just version, it will applied to the trace as well, if applied a trace version it will take precedence
-                    "user_id": user_id,
+                    "user_id": end_user_id,
                 }
                 for key in list(
                     filter(lambda key: key.startswith("trace_"), clean_metadata.keys())
@@ -562,11 +574,7 @@ class LangFuseLogger:
                     trace_params["metadata"] = {"metadata_passed_to_litellm": metadata}
 
             cost = kwargs.get("response_cost", None)
-            print_verbose(f"trace: {cost}")
-
-            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
-                "standard_logging_object", None
-            )
+            verbose_logger.debug(f"trace: {cost}")
 
             clean_metadata["litellm_response_cost"] = cost
             if standard_logging_object is not None:
