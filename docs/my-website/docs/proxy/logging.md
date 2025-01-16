@@ -2,6 +2,7 @@
 
 Log Proxy input, output, and exceptions using:
 
+- Lunary
 - Langfuse
 - OpenTelemetry
 - GCS, s3, Azure (Blob) Buckets
@@ -109,11 +110,127 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 Removes any field with `user_api_key_*` from metadata.
 
+
+### Turn off all tracking/logging
+
+For some use cases, you may want to turn off all tracking/logging. You can do this by passing `no-log=True` in the request body.
+
+<Tabs>
+<TabItem value="Curl" label="Curl Request">
+
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer <litellm-api-key>' \
+-d '{
+    "model": "openai/gpt-3.5-turbo",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "What'\''s in this image?"
+          }
+        ]
+      }
+    ],
+    "max_tokens": 300,
+    "no-log": true # 👈 Key Change
+}'
+```
+
+</TabItem>
+<TabItem value="OpenAI" label="OpenAI">
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:4000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    extra_body={
+      "no-log": True # 👈 Key Change
+    }
+)
+
+print(response)
+```
+
+</TabItem>
+</Tabs>
+
+**Expected Console Log**  
+
+```
+LiteLLM.Info: "no-log request, skipping logging"
+```
+
+
 ## What gets logged?
 
 Found under `kwargs["standard_logging_object"]`. This is a standard payload, logged for every response.
 
 [👉 **Standard Logging Payload Specification**](./logging_spec)
+
+## Lunary
+### Step1: Install dependencies and set your environment variables 
+Install the dependencies
+```shell
+pip install litellm lunary
+```
+
+Get you Lunary public key from from https://app.lunary.ai/settings 
+```shell
+export LUNARY_PUBLIC_KEY="<your-public-key>"
+```
+
+### Step 2: Create a `config.yaml` and set `lunary` callbacks
+
+```yaml
+model_list:
+  - model_name: "*"
+    litellm_params:
+      model: "*"
+litellm_settings:
+  success_callback: ["lunary"]
+  failure_callback: ["lunary"]
+```
+
+### Step 3: Start the LiteLLM proxy
+```shell
+litellm --config config.yaml
+```
+
+### Step 4: Make a request
+
+```shell
+curl -X POST 'http://0.0.0.0:4000/chat/completions' \
+-H 'Content-Type: application/json' \
+-d '{
+    "model": "gpt-4o",
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a helpful math tutor. Guide the user through the solution step by step."
+      },
+      {
+        "role": "user",
+        "content": "how can I solve 8x + 7 = -23"
+      }
+    ]
+}'
+```
 
 ## Langfuse
 
@@ -914,6 +1031,28 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 Your logs should be available on the specified s3 Bucket
 
+### Team Alias Prefix in Object Key
+
+**This is a preview feature**
+
+You can add the team alias to the object key by setting the `team_alias` in the `config.yaml` file. This will prefix the object key with the team alias.
+
+```yaml
+litellm_settings:
+  callbacks: ["s3"]
+  enable_preview_features: true
+  s3_callback_params:
+    s3_bucket_name: logs-bucket-litellm
+    s3_region_name: us-west-2
+    s3_aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+    s3_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+    s3_path: my-test-path
+    s3_endpoint_url: https://s3.amazonaws.com
+    s3_use_team_prefix: true
+```
+
+On s3 bucket, you will see the object key as `my-test-path/my-team-alias/...`
+
 ## Azure Blob Storage
 
 Log LLM Logs to [Azure Data Lake Storage](https://learn.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-introduction)
@@ -1003,6 +1142,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 LiteLLM Supports logging to the following Datdog Integrations:
 - `datadog` [Datadog Logs](https://docs.datadoghq.com/logs/)
 - `datadog_llm_observability` [Datadog LLM Observability](https://www.datadoghq.com/product/llm-observability/)
+- `ddtrace-run` [Datadog Tracing](#datadog-tracing)
 
 <Tabs>
 <TabItem value="datadog" label="Datadog Logs">
@@ -1074,6 +1214,21 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 Expected output on Datadog
 
 <Image img={require('../../img/dd_small1.png')} />
+
+#### Datadog Tracing
+
+Use `ddtrace-run` to enable [Datadog Tracing](https://ddtrace.readthedocs.io/en/stable/installation_quickstart.html) on litellm proxy
+
+Pass `USE_DDTRACE=true` to the docker run command. When `USE_DDTRACE=true`, the proxy will run `ddtrace-run litellm` as the `ENTRYPOINT` instead of just `litellm`
+
+```bash
+docker run \
+    -v $(pwd)/litellm_config.yaml:/app/config.yaml \
+    -e USE_DDTRACE=true \
+    -p 4000:4000 \
+    ghcr.io/berriai/litellm:main-latest \
+    --config /app/config.yaml --detailed_debug
+```
 
 ### Set DD variables (`DD_SERVICE` etc)
 
