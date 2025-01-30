@@ -51,7 +51,7 @@ const sidebars = {
         {
           type: "category",
           label: "Architecture",
-          items: ["proxy/architecture", "proxy/db_info", "router_architecture", "proxy/user_management_heirarchy"],
+          items: ["proxy/architecture", "proxy/db_info", "router_architecture", "proxy/user_management_heirarchy", "proxy/jwt_auth_arch"],
         },
         {
           type: "link",
@@ -66,6 +66,7 @@ const sidebars = {
             "proxy/user_keys",
             "proxy/clientside_auth",
             "proxy/response_headers",
+            "proxy/request_headers",
           ],
         },
         {
@@ -416,14 +417,8 @@ const sidebars = {
       items: [
         "extras/contributing",
         "data_security",
+        "data_retention",
         "migration_policy",
-        "contributing",
-        "proxy/pii_masking",
-        "extras/code_quality",
-        "rules",
-        "proxy/team_based_routing",
-        "proxy/customer_routing",
-        "proxy_server",
         {
           type: "category",
           label: "❤️ 🚅 Projects built on LiteLLM",
@@ -435,6 +430,7 @@ const sidebars = {
             slug: "/project",
           },
           items: [
+            "projects/smolagents",
             "projects/Docq.AI",
             "projects/OpenInterpreter",
             "projects/dbally",
@@ -452,6 +448,13 @@ const sidebars = {
             "projects/llm_cord",
           ],
         },
+        "contributing",
+        "proxy/pii_masking",
+        "extras/code_quality",
+        "rules",
+        "proxy/team_based_routing",
+        "proxy/customer_routing",
+        "proxy_server",
       ],
     },
     "troubleshoot",
