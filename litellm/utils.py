@@ -150,6 +150,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     ProviderField,
     ProviderSpecificModelInfo,
+    SelectTokenizerResponse,
     StreamingChoices,
     TextChoices,
     TextCompletionResponse,
@@ -352,8 +353,12 @@ def _add_custom_logger_callback_to_specific_event(
             and _custom_logger_class_exists_in_success_callbacks(callback_class)
             is False
         ):
-            litellm.success_callback.append(callback_class)
-            litellm._async_success_callback.append(callback_class)
+            litellm.logging_callback_manager.add_litellm_success_callback(
+                callback_class
+            )
+            litellm.logging_callback_manager.add_litellm_async_success_callback(
+                callback_class
+            )
             if callback in litellm.success_callback:
                 litellm.success_callback.remove(
                     callback
@@ -367,8 +372,12 @@ def _add_custom_logger_callback_to_specific_event(
             and _custom_logger_class_exists_in_failure_callbacks(callback_class)
             is False
         ):
-            litellm.failure_callback.append(callback_class)
-            litellm._async_failure_callback.append(callback_class)
+            litellm.logging_callback_manager.add_litellm_failure_callback(
+                callback_class
+            )
+            litellm.logging_callback_manager.add_litellm_async_failure_callback(
+                callback_class
+            )
             if callback in litellm.failure_callback:
                 litellm.failure_callback.remove(
                     callback
@@ -447,13 +456,13 @@ def function_setup(  # noqa: PLR0915
                 if callback not in litellm.input_callback:
                     litellm.input_callback.append(callback)  # type: ignore
                 if callback not in litellm.success_callback:
-                    litellm.success_callback.append(callback)  # type: ignore
+                    litellm.logging_callback_manager.add_litellm_success_callback(callback)  # type: ignore
                 if callback not in litellm.failure_callback:
-                    litellm.failure_callback.append(callback)  # type: ignore
+                    litellm.logging_callback_manager.add_litellm_failure_callback(callback)  # type: ignore
                 if callback not in litellm._async_success_callback:
-                    litellm._async_success_callback.append(callback)  # type: ignore
+                    litellm.logging_callback_manager.add_litellm_async_success_callback(callback)  # type: ignore
                 if callback not in litellm._async_failure_callback:
-                    litellm._async_failure_callback.append(callback)  # type: ignore
+                    litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)  # type: ignore
             print_verbose(
                 f"Initialized litellm callbacks, Async Success Callbacks: {litellm._async_success_callback}"
             )
@@ -488,12 +497,16 @@ def function_setup(  # noqa: PLR0915
             removed_async_items = []
             for index, callback in enumerate(litellm.success_callback):  # type: ignore
                 if inspect.iscoroutinefunction(callback):
-                    litellm._async_success_callback.append(callback)
+                    litellm.logging_callback_manager.add_litellm_async_success_callback(
+                        callback
+                    )
                     removed_async_items.append(index)
                 elif callback == "dynamodb" or callback == "openmeter":
                     # dynamo is an async callback, it's used for the proxy and needs to be async
                     # we only support async dynamo db logging for acompletion/aembedding since that's used on proxy
-                    litellm._async_success_callback.append(callback)
+                    litellm.logging_callback_manager.add_litellm_async_success_callback(
+                        callback
+                    )
                     removed_async_items.append(index)
                 elif (
                     callback in litellm._known_custom_logger_compatible_callbacks
@@ -509,7 +522,9 @@ def function_setup(  # noqa: PLR0915
             removed_async_items = []
             for index, callback in enumerate(litellm.failure_callback):  # type: ignore
                 if inspect.iscoroutinefunction(callback):
-                    litellm._async_failure_callback.append(callback)
+                    litellm.logging_callback_manager.add_litellm_async_failure_callback(
+                        callback
+                    )
                     removed_async_items.append(index)
                 elif (
                     callback in litellm._known_custom_logger_compatible_callbacks
@@ -1426,34 +1441,47 @@ def _select_tokenizer(
 
 
 @lru_cache(maxsize=128)
-def _select_tokenizer_helper(model: str):
+def _select_tokenizer_helper(model: str) -> SelectTokenizerResponse:
+
+    if litellm.disable_hf_tokenizer_download is True:
+        return _return_openai_tokenizer(model)
+
     try:
-        if model in litellm.cohere_models and "command-r" in model:
-            # cohere
-            cohere_tokenizer = Tokenizer.from_pretrained(
-                "Xenova/c4ai-command-r-v01-tokenizer"
-            )
-            return {"type": "huggingface_tokenizer", "tokenizer": cohere_tokenizer}
-        # anthropic
-        elif model in litellm.anthropic_models and "claude-3" not in model:
-            claude_tokenizer = Tokenizer.from_str(claude_json_str)
-            return {"type": "huggingface_tokenizer", "tokenizer": claude_tokenizer}
-        # llama2
-        elif "llama-2" in model.lower() or "replicate" in model.lower():
-            tokenizer = Tokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
-            return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
-        # llama3
-        elif "llama-3" in model.lower():
-            tokenizer = Tokenizer.from_pretrained("Xenova/llama-3-tokenizer")
-            return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+        result = _return_huggingface_tokenizer(model)
+        if result is not None:
+            return result
     except Exception as e:
         verbose_logger.debug(f"Error selecting tokenizer: {e}")
 
     # default - tiktoken
-    return {
-        "type": "openai_tokenizer",
-        "tokenizer": encoding,
-    }  # default to openai tokenizer
+    return _return_openai_tokenizer(model)
+
+
+def _return_openai_tokenizer(model: str) -> SelectTokenizerResponse:
+    return {"type": "openai_tokenizer", "tokenizer": encoding}
+
+
+def _return_huggingface_tokenizer(model: str) -> Optional[SelectTokenizerResponse]:
+    if model in litellm.cohere_models and "command-r" in model:
+        # cohere
+        cohere_tokenizer = Tokenizer.from_pretrained(
+            "Xenova/c4ai-command-r-v01-tokenizer"
+        )
+        return {"type": "huggingface_tokenizer", "tokenizer": cohere_tokenizer}
+    # anthropic
+    elif model in litellm.anthropic_models and "claude-3" not in model:
+        claude_tokenizer = Tokenizer.from_str(claude_json_str)
+        return {"type": "huggingface_tokenizer", "tokenizer": claude_tokenizer}
+    # llama2
+    elif "llama-2" in model.lower() or "replicate" in model.lower():
+        tokenizer = Tokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
+        return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+    # llama3
+    elif "llama-3" in model.lower():
+        tokenizer = Tokenizer.from_pretrained("Xenova/llama-3-tokenizer")
+        return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+    else:
+        return None
 
 
 def encode(model="", text="", custom_tokenizer: Optional[dict] = None):

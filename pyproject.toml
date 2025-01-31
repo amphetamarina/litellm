@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "cyborgmarina-litellm"
-version = "0.1.5"
+version = "0.1.6"
 description = "A fork of BerriAI's litellm library, with specific features needed for some projects."
 authors = ["Marina Rosa"]
 license = "MIT"
@@ -94,7 +94,7 @@ requires = ["poetry-core", "wheel"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.commitizen]
-version = "1.59.10"
+version = "1.59.12"
 version_files = [
     "pyproject.toml:^version"
 ]
