@@ -5,7 +5,7 @@ import threading
 import time
 import traceback
 import uuid
-from typing import Any, Callable, Dict, List, Optional, cast
+from typing import Any, Callable, Dict, List, Optional, Union, cast
 
 import httpx
 from pydantic import BaseModel
@@ -762,7 +762,9 @@ class CustomStreamWrapper:
             if hold is False:
                 ## check if openai/azure chunk
                 original_chunk = response_obj.get("original_chunk", None)
-                if original_chunk:
+                if original_chunk and isinstance(original_chunk, ModelResponseStream):
+                    return original_chunk
+                elif original_chunk:
                     model_response.id = original_chunk.id
                     self.response_id = original_chunk.id
                     if len(original_chunk.choices) > 0:
@@ -870,7 +872,7 @@ class CustomStreamWrapper:
                 self.chunks.append(model_response)
             return
 
-    def chunk_creator(self, chunk):  # type: ignore  # noqa: PLR0915
+    def chunk_creator(self, chunk: Any):  # type: ignore  # noqa: PLR0915
         model_response = self.model_response_creator()
         response_obj: Dict[str, Any] = {}
 
@@ -886,16 +888,13 @@ class CustomStreamWrapper:
                 )  # check if chunk is a generic streaming chunk
             ) or (
                 self.custom_llm_provider
-                and (
-                    self.custom_llm_provider == "anthropic"
-                    or self.custom_llm_provider in litellm._custom_providers
-                )
+                and self.custom_llm_provider in litellm._custom_providers
             ):
 
                 if self.received_finish_reason is not None:
                     if "provider_specific_fields" not in chunk:
                         raise StopIteration
-                anthropic_response_obj: GChunk = chunk
+                anthropic_response_obj: GChunk = cast(GChunk, chunk)
                 completion_obj["content"] = anthropic_response_obj["text"]
                 if anthropic_response_obj["is_finished"]:
                     self.received_finish_reason = anthropic_response_obj[
@@ -927,7 +926,7 @@ class CustomStreamWrapper:
                     ].items():
                         setattr(model_response, key, value)
 
-                response_obj = anthropic_response_obj
+                response_obj = cast(Dict[str, Any], anthropic_response_obj)
             elif self.model == "replicate" or self.custom_llm_provider == "replicate":
                 response_obj = self.handle_replicate_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
@@ -1447,6 +1446,7 @@ class CustomStreamWrapper:
                     if hasattr(
                         response, "usage"
                     ):  # remove usage from chunk, only send on final chunk
+
                         # Convert the object to a dictionary
                         obj_dict = response.dict()
 
