@@ -40,6 +40,7 @@ from litellm.types.llms.openai import (
     ChatCompletionUsageBlock,
 )
 from litellm.types.llms.vertex_ai import (
+    VERTEX_CREDENTIALS_TYPES,
     Candidates,
     ContentType,
     FunctionCallingConfig,
@@ -850,7 +851,7 @@ async def make_call(
             message=VertexGeminiConfig().translate_exception_str(exception_string),
             headers=e.response.headers,
         )
-    if response.status_code != 200:
+    if response.status_code != 200 and response.status_code != 201:
         raise VertexAIError(
             status_code=response.status_code,
             message=response.text,
@@ -888,7 +889,7 @@ def make_sync_call(
 
     response = client.post(api_base, headers=headers, data=data, stream=True)
 
-    if response.status_code != 200:
+    if response.status_code != 200 and response.status_code != 201:
         raise VertexAIError(
             status_code=response.status_code,
             message=str(response.read()),
@@ -935,7 +936,7 @@ class VertexLLM(VertexBase):
         client: Optional[AsyncHTTPHandler] = None,
         vertex_project: Optional[str] = None,
         vertex_location: Optional[str] = None,
-        vertex_credentials: Optional[str] = None,
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES] = None,
         gemini_api_key: Optional[str] = None,
         extra_headers: Optional[dict] = None,
     ) -> CustomStreamWrapper:
@@ -1023,11 +1024,10 @@ class VertexLLM(VertexBase):
         client: Optional[AsyncHTTPHandler] = None,
         vertex_project: Optional[str] = None,
         vertex_location: Optional[str] = None,
-        vertex_credentials: Optional[str] = None,
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES] = None,
         gemini_api_key: Optional[str] = None,
         extra_headers: Optional[dict] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
-
         should_use_v1beta1_features = self.is_using_v1beta1_features(
             optional_params=optional_params
         )
@@ -1128,7 +1128,7 @@ class VertexLLM(VertexBase):
         timeout: Optional[Union[float, httpx.Timeout]],
         vertex_project: Optional[str],
         vertex_location: Optional[str],
-        vertex_credentials: Optional[str],
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
         gemini_api_key: Optional[str],
         litellm_params: dict,
         logger_fn=None,
@@ -1416,7 +1416,8 @@ class ModelResponseIterator:
         return self.chunk_parser(chunk=json_chunk)
 
     def handle_accumulated_json_chunk(self, chunk: str) -> GenericStreamingChunk:
-        message = chunk.replace("data:", "").replace("\n\n", "")
+        chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
+        message = chunk.replace("\n\n", "")
 
         # Accumulate JSON data
         self.accumulated_json += message
@@ -1439,7 +1440,7 @@ class ModelResponseIterator:
 
     def _common_chunk_parsing_logic(self, chunk: str) -> GenericStreamingChunk:
         try:
-            chunk = chunk.replace("data:", "")
+            chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
             if len(chunk) > 0:
                 """
                 Check if initial chunk valid json

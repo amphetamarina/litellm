@@ -62,9 +62,7 @@ async def make_call(
         client = litellm.module_level_aclient
 
     try:
-        response = await client.post(
-            api_base, headers=headers, data=data, stream=True, timeout=timeout
-        )
+        response = await client.post(api_base, headers=headers, data=data, stream=True, timeout=timeout)
     except httpx.HTTPStatusError as e:
         error_headers = getattr(e, "headers", None)
         error_response = getattr(e, "response", None)
@@ -113,9 +111,7 @@ def make_sync_call(
         client = litellm.module_level_client  # re-use a module level client
 
     try:
-        response = client.post(
-            api_base, headers=headers, data=data, stream=True, timeout=timeout
-        )
+        response = client.post(api_base, headers=headers, data=data, stream=True, timeout=timeout)
     except httpx.HTTPStatusError as e:
         error_headers = getattr(e, "headers", None)
         error_response = getattr(e, "response", None)
@@ -226,14 +222,10 @@ class AnthropicChatCompletion(BaseLLM):
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
-        async_handler = client or get_async_httpx_client(
-            llm_provider=litellm.LlmProviders.ANTHROPIC
-        )
+        async_handler = client or get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)
 
         try:
-            response = await async_handler.post(
-                api_base, headers=headers, json=data, timeout=timeout
-            )
+            response = await async_handler.post(api_base, headers=headers, json=data, timeout=timeout)
         except Exception as e:
             ## LOGGING
             logging_obj.post_call(
@@ -290,7 +282,6 @@ class AnthropicChatCompletion(BaseLLM):
         headers={},
         client=None,
     ):
-
         optional_params = copy.deepcopy(optional_params)
         stream = optional_params.pop("stream", None)
         json_mode: bool = optional_params.pop("json_mode", False)
@@ -354,11 +345,7 @@ class AnthropicChatCompletion(BaseLLM):
                     logger_fn=logger_fn,
                     headers=headers,
                     timeout=timeout,
-                    client=(
-                        client
-                        if client is not None and isinstance(client, AsyncHTTPHandler)
-                        else None
-                    ),
+                    client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
                 )
             else:
                 return self.acompletion_function(
@@ -456,9 +443,7 @@ class AnthropicChatCompletion(BaseLLM):
 
 
 class ModelResponseIterator:
-    def __init__(
-        self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False
-    ):
+    def __init__(self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
         self.content_blocks: List[ContentBlockDelta] = []
@@ -474,7 +459,10 @@ class ModelResponseIterator:
         if len(self.content_blocks) == 0:
             return False
 
-        if self.content_blocks[0]["delta"]["type"] == "text_delta":
+        if (
+            self.content_blocks[0]["delta"]["type"] == "text_delta"
+            or self.content_blocks[0]["delta"]["type"] == "thinking_delta"
+        ):
             return False
 
         for block in self.content_blocks:
@@ -485,34 +473,26 @@ class ModelResponseIterator:
             return True
         return False
 
-    def _handle_usage(
-        self, anthropic_usage_chunk: Union[dict, UsageDelta]
-    ) -> AnthropicChatCompletionUsageBlock:
-
+    def _handle_usage(self, anthropic_usage_chunk: Union[dict, UsageDelta]) -> AnthropicChatCompletionUsageBlock:
         usage_block = AnthropicChatCompletionUsageBlock(
             prompt_tokens=anthropic_usage_chunk.get("input_tokens", 0),
             completion_tokens=anthropic_usage_chunk.get("output_tokens", 0),
-            total_tokens=anthropic_usage_chunk.get("input_tokens", 0)
-            + anthropic_usage_chunk.get("output_tokens", 0),
+            total_tokens=anthropic_usage_chunk.get("input_tokens", 0) + anthropic_usage_chunk.get("output_tokens", 0),
         )
 
-        cache_creation_input_tokens = anthropic_usage_chunk.get(
-            "cache_creation_input_tokens"
-        )
-        if cache_creation_input_tokens is not None and isinstance(
-            cache_creation_input_tokens, int
-        ):
+        cache_creation_input_tokens = anthropic_usage_chunk.get("cache_creation_input_tokens")
+        if cache_creation_input_tokens is not None and isinstance(cache_creation_input_tokens, int):
             usage_block["cache_creation_input_tokens"] = cache_creation_input_tokens
 
         cache_read_input_tokens = anthropic_usage_chunk.get("cache_read_input_tokens")
-        if cache_read_input_tokens is not None and isinstance(
-            cache_read_input_tokens, int
-        ):
+        if cache_read_input_tokens is not None and isinstance(cache_read_input_tokens, int):
             usage_block["cache_read_input_tokens"] = cache_read_input_tokens
 
         return usage_block
 
-    def _content_block_delta_helper(self, chunk: dict) -> Tuple[
+    def _content_block_delta_helper(
+        self, chunk: dict
+    ) -> Tuple[
         str,
         Optional[ChatCompletionToolCallChunk],
         List[ChatCompletionThinkingBlock],
@@ -542,23 +522,18 @@ class ModelResponseIterator:
             }
         elif "citation" in content_block["delta"]:
             provider_specific_fields["citation"] = content_block["delta"]["citation"]
-        elif (
-            "thinking" in content_block["delta"]
-            or "signature_delta" == content_block["delta"]
-        ):
+        elif "thinking" in content_block["delta"] or "signature" in content_block["delta"]:
             thinking_blocks = [
                 ChatCompletionThinkingBlock(
                     type="thinking",
-                    thinking=content_block["delta"].get("thinking"),
-                    signature_delta=content_block["delta"].get("signature"),
+                    thinking=content_block["delta"].get("thinking") or "",
+                    signature=content_block["delta"].get("signature"),
                 )
             ]
-            provider_specific_fields["thinking_blocks"] = content_block
+            provider_specific_fields["thinking_blocks"] = thinking_blocks
         return text, tool_use, thinking_blocks, provider_specific_fields
 
-    def _handle_reasoning_content(
-        self, thinking_blocks: List[ChatCompletionThinkingBlock]
-    ) -> Optional[str]:
+    def _handle_reasoning_content(self, thinking_blocks: List[ChatCompletionThinkingBlock]) -> Optional[str]:
         """
         Handle the reasoning content
         """
@@ -588,14 +563,11 @@ class ModelResponseIterator:
                 Anthropic content chunk
                 chunk = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': 'Hello'}}
                 """
-                text, tool_use, thinking_blocks, provider_specific_fields = (
-                    self._content_block_delta_helper(chunk=chunk)
+                text, tool_use, thinking_blocks, provider_specific_fields = self._content_block_delta_helper(
+                    chunk=chunk
                 )
-
                 if thinking_blocks:
-                    reasoning_content = self._handle_reasoning_content(
-                        thinking_blocks=thinking_blocks
-                    )
+                    reasoning_content = self._handle_reasoning_content(thinking_blocks=thinking_blocks)
             elif type_chunk == "content_block_start":
                 """
                 event: content_block_start
@@ -620,6 +592,7 @@ class ModelResponseIterator:
                 ContentBlockStop(**chunk)  # type: ignore
                 # check if tool call content block
                 is_empty = self.check_empty_tool_call_args()
+
                 if is_empty:
                     tool_use = {
                         "id": None,
@@ -638,8 +611,7 @@ class ModelResponseIterator:
                 # TODO - get usage from this chunk, set in response
                 message_delta = MessageBlockDelta(**chunk)  # type: ignore
                 finish_reason = map_finish_reason(
-                    finish_reason=message_delta["delta"].get("stop_reason", "stop")
-                    or "stop"
+                    finish_reason=message_delta["delta"].get("stop_reason", "stop") or "stop"
                 )
                 usage = self._handle_usage(anthropic_usage_chunk=message_delta["usage"])
             elif type_chunk == "message_start":
@@ -664,9 +636,7 @@ class ModelResponseIterator:
                 """
                 message_start_block = MessageStartBlock(**chunk)  # type: ignore
                 if "usage" in message_start_block["message"]:
-                    usage = self._handle_usage(
-                        anthropic_usage_chunk=message_start_block["message"]["usage"]
-                    )
+                    usage = self._handle_usage(anthropic_usage_chunk=message_start_block["message"]["usage"])
             elif type_chunk == "error":
                 """
                 {"type":"error","error":{"details":null,"type":"api_error","message":"Internal server error"}      }
@@ -687,19 +657,14 @@ class ModelResponseIterator:
                         delta=Delta(
                             content=text,
                             tool_calls=[tool_use] if tool_use is not None else None,
-                            provider_specific_fields=(
-                                provider_specific_fields
-                                if provider_specific_fields
-                                else None
-                            ),
-                            thinking_blocks=(
-                                thinking_blocks if thinking_blocks else None
-                            ),
+                            provider_specific_fields=(provider_specific_fields if provider_specific_fields else None),
+                            thinking_blocks=(thinking_blocks if thinking_blocks else None),
                             reasoning_content=reasoning_content,
                         ),
                         finish_reason=finish_reason,
                     )
-                ]
+                ],
+                usage=usage,
             )
 
             if usage:
@@ -729,9 +694,7 @@ class ModelResponseIterator:
             tool_use: The ChatCompletionToolCallChunk to use in the chunk response
         """
         if self.json_mode is True and tool_use is not None:
-            message = AnthropicConfig._convert_tool_response_to_message(
-                tool_calls=[tool_use]
-            )
+            message = AnthropicConfig._convert_tool_response_to_message(tool_calls=[tool_use])
             if message is not None:
                 text = message.content or ""
                 tool_use = None
@@ -813,9 +776,7 @@ class ModelResponseIterator:
         except ValueError as e:
             raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
-    def convert_str_chunk_to_generic_chunk(
-        self, chunk: str
-    ) -> Union[GenericStreamingChunk, ModelResponseStream]:
+    def convert_str_chunk_to_generic_chunk(self, chunk: str) -> ModelResponseStream:
         """
         Convert a string chunk to a GenericStreamingChunk
 
@@ -835,11 +796,4 @@ class ModelResponseIterator:
             data_json = json.loads(str_line[5:])
             return self.chunk_parser(chunk=data_json)
         else:
-            return GenericStreamingChunk(
-                text="",
-                is_finished=False,
-                finish_reason="",
-                usage=None,
-                index=0,
-                tool_use=None,
-            )
+            return ModelResponseStream()
