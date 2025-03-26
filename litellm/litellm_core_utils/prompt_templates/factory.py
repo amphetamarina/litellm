@@ -177,7 +177,7 @@ def _handle_ollama_system_message(messages: list, prompt: str, msg_i: int) -> Tu
 
 
 def ollama_pt(
-    model, messages
+    model: str, messages: list
 ) -> Union[
     str, OllamaVisionModelObject
 ]:  # https://github.com/ollama/ollama/blob/af4cf55884ac54b9e637cd71dadfe9b7a5685877/docs/modelfile.md#template
