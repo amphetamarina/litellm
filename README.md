@@ -3,3 +3,4 @@ A fork of BerriAI's litellm library, with specific features needed for some proj
 Original repo: https://github.com/BerriAI/litellm
 
 - Add support for grounding_metadata on gemini streaming
+- Add gemini native image generation

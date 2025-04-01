@@ -563,9 +563,12 @@ class ModelResponseIterator:
                 Anthropic content chunk
                 chunk = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': 'Hello'}}
                 """
-                text, tool_use, thinking_blocks, provider_specific_fields = self._content_block_delta_helper(
-                    chunk=chunk
-                )
+                (
+                    text,
+                    tool_use,
+                    thinking_blocks,
+                    provider_specific_fields,
+                ) = self._content_block_delta_helper(chunk=chunk)
                 if thinking_blocks:
                     reasoning_content = self._handle_reasoning_content(thinking_blocks=thinking_blocks)
             elif type_chunk == "content_block_start":

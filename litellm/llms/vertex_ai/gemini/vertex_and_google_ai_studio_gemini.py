@@ -207,6 +207,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "extra_headers",
             "seed",
             "logprobs",
+            "top_logprobs",  # Added this to list of supported openAI params
+            "modalities",
         ]
 
     def map_tool_choice_values(
@@ -246,9 +248,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         value = _remove_strict_from_schema(value)
 
         for tool in value:
-            openai_function_object: Optional[ChatCompletionToolParamFunctionChunk] = (
-                None
-            )
+            openai_function_object: Optional[
+                ChatCompletionToolParamFunctionChunk
+            ] = None
             if "function" in tool:  # tools list
                 _openai_function_object = ChatCompletionToolParamFunctionChunk(  # type: ignore
                     **tool["function"]
@@ -326,22 +328,22 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         for param, value in non_default_params.items():
             if param == "temperature":
                 optional_params["temperature"] = value
-            if param == "top_p":
+            elif param == "top_p":
                 optional_params["top_p"] = value
-            if (
+            elif (
                 param == "stream" and value is True
             ):  # sending stream = False, can cause it to get passed unchecked and raise issues
                 optional_params["stream"] = value
-            if param == "n":
+            elif param == "n":
                 optional_params["candidate_count"] = value
-            if param == "stop":
+            elif param == "stop":
                 if isinstance(value, str):
                     optional_params["stop_sequences"] = [value]
                 elif isinstance(value, list):
                     optional_params["stop_sequences"] = value
-            if param == "max_tokens" or param == "max_completion_tokens":
+            elif param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_output_tokens"] = value
-            if param == "response_format" and isinstance(value, dict):  # type: ignore
+            elif param == "response_format" and isinstance(value, dict):  # type: ignore
                 # remove 'additionalProperties' from json schema
                 value = _remove_additional_properties(value)
                 # remove 'strict' from json schema
@@ -364,18 +366,20 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     optional_params["response_schema"] = self._map_response_schema(
                         value=optional_params["response_schema"]
                     )
-            if param == "frequency_penalty":
+            elif param == "frequency_penalty":
                 optional_params["frequency_penalty"] = value
-            if param == "presence_penalty":
+            elif param == "presence_penalty":
                 optional_params["presence_penalty"] = value
-            if param == "logprobs":
+            elif param == "logprobs":
                 optional_params["responseLogprobs"] = value
-            if (param == "tools" or param == "functions") and isinstance(value, list):
+            elif param == "top_logprobs":
+                optional_params["logprobs"] = value
+            elif (param == "tools" or param == "functions") and isinstance(value, list):
                 optional_params["tools"] = self._map_function(value=value)
                 optional_params["litellm_param_is_function_call"] = (
                     True if param == "functions" else False
                 )
-            if param == "tool_choice" and (
+            elif param == "tool_choice" and (
                 isinstance(value, str) or isinstance(value, dict)
             ):
                 _tool_choice_value = self.map_tool_choice_values(
@@ -383,8 +387,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 )
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
-            if param == "seed":
+            elif param == "seed":
                 optional_params["seed"] = value
+            elif param == "modalities" and isinstance(value, list):
+                response_modalities = []
+                for modality in value:
+                    if modality == "text":
+                        response_modalities.append("TEXT")
+                    elif modality == "image":
+                        response_modalities.append("IMAGE")
+                    else:
+                        response_modalities.append("MODALITY_UNSPECIFIED")
+                optional_params["responseModalities"] = response_modalities
 
         if litellm.vertex_ai_safety_settings is not None:
             optional_params["safety_settings"] = litellm.vertex_ai_safety_settings
@@ -421,6 +435,49 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "europe-west9",
         ]
 
+    @staticmethod
+    def get_model_for_vertex_ai_url(model: str) -> str:
+        """
+        Returns the model name to use in the request to Vertex AI
+
+        Handles 2 cases:
+        1. User passed `model="vertex_ai/gemini/ft-uuid"`, we need to return `ft-uuid` for the request to Vertex AI
+        2. User passed `model="vertex_ai/gemini-2.0-flash-001"`, we need to return `gemini-2.0-flash-001` for the request to Vertex AI
+
+        Args:
+            model (str): The model name to use in the request to Vertex AI
+
+        Returns:
+            str: The model name to use in the request to Vertex AI
+        """
+        if VertexGeminiConfig._is_model_gemini_spec_model(model):
+            return VertexGeminiConfig._get_model_name_from_gemini_spec_model(model)
+        return model
+
+    @staticmethod
+    def _is_model_gemini_spec_model(model: Optional[str]) -> bool:
+        """
+        Returns true if user is trying to call custom model in `/gemini` request/response format
+        """
+        if model is None:
+            return False
+        if "gemini/" in model:
+            return True
+        return False
+
+    @staticmethod
+    def _get_model_name_from_gemini_spec_model(model: str) -> str:
+        """
+        Returns the model name if model="vertex_ai/gemini/<unique_id>"
+
+        Example:
+        - model = "gemini/1234567890"
+        - returns "1234567890"
+        """
+        if "gemini/" in model:
+            return model.split("/")[-1]
+        return model
+
     def get_flagged_finish_reasons(self) -> Dict[str, str]:
         """
         Return Dictionary of finish reasons which indicate response was flagged
@@ -452,6 +509,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         for part in parts:
             if "text" in part:
                 _content_str += part["text"]
+            elif "inlineData" in part:  # base64 encoded image
+                _content_str += "data:{};base64,{}".format(
+                    part["inlineData"]["mimeType"], part["inlineData"]["data"]
+                )
+
         if _content_str:
             return _content_str
         return None
@@ -602,16 +664,25 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         completion_response: GenerateContentResponseBody,
     ) -> Usage:
         cached_tokens: Optional[int] = None
+        audio_tokens: Optional[int] = None
+        text_tokens: Optional[int] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
         if "cachedContentTokenCount" in completion_response["usageMetadata"]:
             cached_tokens = completion_response["usageMetadata"][
                 "cachedContentTokenCount"
             ]
+        if "promptTokensDetails" in completion_response["usageMetadata"]:
+            for detail in completion_response["usageMetadata"]["promptTokensDetails"]:
+                if detail["modality"] == "AUDIO":
+                    audio_tokens = detail["tokenCount"]
+                elif detail["modality"] == "TEXT":
+                    text_tokens = detail["tokenCount"]
 
-        if cached_tokens is not None:
-            prompt_tokens_details = PromptTokensDetailsWrapper(
-                cached_tokens=cached_tokens,
-            )
+        prompt_tokens_details = PromptTokensDetailsWrapper(
+            cached_tokens=cached_tokens,
+            audio_tokens=audio_tokens,
+            text_tokens=text_tokens,
+        )
         ## GET USAGE ##
         usage = Usage(
             prompt_tokens=completion_response["usageMetadata"].get(
@@ -687,7 +758,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     completion_response=completion_response,
                 )
 
-        model_response.choices = []  # type: ignore
+        model_response.choices = []
 
         try:
             ## CHECK IF GROUNDING METADATA IN REQUEST
@@ -750,6 +821,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     model_response.choices.append(choice)
 
             usage = self._calculate_usage(completion_response=completion_response)
+
             setattr(model_response, "usage", usage)
 
             ## ADD GROUNDING METADATA ##
@@ -762,15 +834,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
             ## ADD SAFETY RATINGS ##
             setattr(model_response, "vertex_ai_safety_results", safety_ratings)
-            model_response._hidden_params["vertex_ai_safety_results"] = (
-                safety_ratings  # older approach - maintaining to prevent regressions
-            )
+            model_response._hidden_params[
+                "vertex_ai_safety_results"
+            ] = safety_ratings  # older approach - maintaining to prevent regressions
 
             ## ADD CITATION METADATA ##
             setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)
-            model_response._hidden_params["vertex_ai_citation_metadata"] = (
-                citation_metadata  # older approach - maintaining to prevent regressions
-            )
+            model_response._hidden_params[
+                "vertex_ai_citation_metadata"
+            ] = citation_metadata  # older approach - maintaining to prevent regressions
 
         except Exception as e:
             raise VertexAIError(
