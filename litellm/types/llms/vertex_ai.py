@@ -56,6 +56,11 @@ class HttpxCodeExecutionResult(TypedDict):
     output: str
 
 
+class HttpxBlobType(TypedDict):
+    mimeType: str
+    data: str
+
+
 class HttpxPartType(TypedDict, total=False):
     text: str
     inlineData: BlobType

@@ -1,5 +1,5 @@
 """
-Transformation logic from OpenAI format to Gemini format. 
+Transformation logic from OpenAI format to Gemini format.
 
 Why separate file? Make it easy to see how transformation works
 """
@@ -82,11 +82,7 @@ def _process_gemini_image(image_url: str, format: Optional[str] = None) -> PartT
             file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
 
             return PartType(file_data=file_data)
-        elif (
-            "https://" in image_url
-            and (image_type := format or _get_image_mime_type_from_url(image_url))
-            is not None
-        ):
+        elif "https://" in image_url and (image_type := format or _get_image_mime_type_from_url(image_url)) is not None:
             file_data = FileDataType(file_uri=image_url, mime_type=image_type)
             return PartType(file_data=file_data)
         elif "http://" in image_url or "https://" in image_url or "base64" in image_url:
@@ -177,18 +173,12 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
             user_content: List[PartType] = []
             init_msg_i = msg_i
             ## MERGE CONSECUTIVE USER CONTENT ##
-            while (
-                msg_i < len(messages) and messages[msg_i]["role"] in user_message_types
-            ):
+            while msg_i < len(messages) and messages[msg_i]["role"] in user_message_types:
                 _message_content = messages[msg_i].get("content")
                 if _message_content is not None and isinstance(_message_content, list):
                     _parts: List[PartType] = []
                     for element_idx, element in enumerate(_message_content):
-                        if (
-                            element["type"] == "text"
-                            and "text" in element
-                            and len(element["text"]) > 0
-                        ):
+                        if element["type"] == "text" and "text" in element and len(element["text"]) > 0:
                             element = cast(ChatCompletionTextObject, element)
                             _part = PartType(text=element["text"])
                             _parts.append(_part)
@@ -201,9 +191,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 format = img_element["image_url"].get("format")
                             else:
                                 image_url = img_element["image_url"]
-                            _part = _process_gemini_image(
-                                image_url=image_url, format=format
-                            )
+                            _part = _process_gemini_image(image_url=image_url, format=format)
                             _parts.append(_part)
                         elif element["type"] == "input_audio":
                             audio_element = cast(ChatCompletionAudioObject, element)
@@ -211,9 +199,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 _part = PartType(
                                     inline_data=BlobType(
                                         data=audio_element["input_audio"]["data"],
-                                        mime_type="audio/{}".format(
-                                            audio_element["input_audio"]["format"]
-                                        ),
+                                        mime_type="audio/{}".format(audio_element["input_audio"]["format"]),
                                     )
                                 )
                                 _parts.append(_part)
@@ -225,22 +211,16 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             if not file_id:
                                 continue
                             try:
-                                _part = _process_gemini_image(
-                                    image_url=file_id, format=format
-                                )
+                                _part = _process_gemini_image(image_url=file_id, format=format)
                                 _parts.append(_part)
-                            except Exception as e:
+                            except Exception:
                                 raise Exception(
                                     "Unable to determine mime type for file_id: {}, set this explicitly using message[{}].content[{}].file.format".format(
                                         file_id, msg_i, element_idx
                                     )
                                 )
                     user_content.extend(_parts)
-                elif (
-                    _message_content is not None
-                    and isinstance(_message_content, str)
-                    and len(_message_content) > 0
-                ):
+                elif _message_content is not None and isinstance(_message_content, str) and len(_message_content) > 0:
                     _part = PartType(text=_message_content)
                     user_content.append(_part)
 
@@ -278,22 +258,15 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 _part = PartType(text=element["text"])
                                 _parts.append(_part)
                     assistant_content.extend(_parts)
-                elif (
-                    _message_content is not None
-                    and isinstance(_message_content, str)
-                    and _message_content
-                ):
+                elif _message_content is not None and isinstance(_message_content, str) and _message_content:
                     assistant_text = _message_content  # either string or none
                     assistant_content.append(PartType(text=assistant_text))  # type: ignore
 
                 ## HANDLE ASSISTANT FUNCTION CALL
                 if (
-                    assistant_msg.get("tool_calls", []) is not None
-                    or assistant_msg.get("function_call") is not None
+                    assistant_msg.get("tool_calls", []) is not None or assistant_msg.get("function_call") is not None
                 ):  # support assistant tool invoke conversion
-                    assistant_content.extend(
-                        convert_to_gemini_tool_call_invoke(assistant_msg)
-                    )
+                    assistant_content.extend(convert_to_gemini_tool_call_invoke(assistant_msg))
                     last_message_with_tool_calls = assistant_msg
 
                 msg_i += 1
@@ -303,18 +276,14 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
 
             ## APPEND TOOL CALL MESSAGES ##
             tool_call_message_roles = ["tool", "function"]
-            if (
-                msg_i < len(messages)
-                and messages[msg_i]["role"] in tool_call_message_roles
-            ):
+            if msg_i < len(messages) and messages[msg_i]["role"] in tool_call_message_roles:
                 _part = convert_to_gemini_tool_call_result(
-                    messages[msg_i], last_message_with_tool_calls  # type: ignore
+                    messages[msg_i],
+                    last_message_with_tool_calls,  # type: ignore
                 )
                 msg_i += 1
                 tool_call_responses.append(_part)
-            if msg_i < len(messages) and (
-                messages[msg_i]["role"] not in tool_call_message_roles
-            ):
+            if msg_i < len(messages) and (messages[msg_i]["role"] not in tool_call_message_roles):
                 if len(tool_call_responses) > 0:
                     contents.append(ContentType(parts=tool_call_responses))
                     tool_call_responses = []
@@ -344,20 +313,17 @@ def _transform_request_body(
     Common transformation logic across sync + async Gemini /generateContent calls.
     """
     # Separate system prompt from rest of message
-    supports_system_message = get_supports_system_message(
-        model=model, custom_llm_provider=custom_llm_provider
-    )
+    supports_system_message = get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider)
     system_instructions, messages = _transform_system_message(
         supports_system_message=supports_system_message, messages=messages
     )
     # Checks for 'response_schema' support - if passed in
     if "response_schema" in optional_params:
-        supports_response_schema = get_supports_response_schema(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
+        supports_response_schema = get_supports_response_schema(model=model, custom_llm_provider=custom_llm_provider)
         if supports_response_schema is False:
             user_response_schema_message = response_schema_prompt(
-                model=model, response_schema=optional_params.get("response_schema")  # type: ignore
+                model=model,
+                response_schema=optional_params.get("response_schema"),  # type: ignore
             )
             messages.append({"role": "user", "content": user_response_schema_message})
             optional_params.pop("response_schema")
@@ -374,27 +340,17 @@ def _transform_request_body(
 
     try:
         if custom_llm_provider == "gemini":
-            content = litellm.GoogleAIStudioGeminiConfig()._transform_messages(
-                messages=messages
-            )
+            content = litellm.GoogleAIStudioGeminiConfig()._transform_messages(messages=messages)
         else:
-            content = litellm.VertexGeminiConfig()._transform_messages(
-                messages=messages
-            )
+            content = litellm.VertexGeminiConfig()._transform_messages(messages=messages)
         tools: Optional[Tools] = optional_params.pop("tools", None)
         tool_choice: Optional[ToolConfig] = optional_params.pop("tool_choice", None)
-        safety_settings: Optional[List[SafetSettingsConfig]] = optional_params.pop(
-            "safety_settings", None
-        )  # type: ignore
+        safety_settings: Optional[List[SafetSettingsConfig]] = optional_params.pop("safety_settings", None)  # type: ignore
         config_fields = GenerationConfig.__annotations__.keys()
 
-        filtered_params = {
-            k: v for k, v in optional_params.items() if k in config_fields
-        }
+        filtered_params = {k: v for k, v in optional_params.items() if k in config_fields}
 
-        generation_config: Optional[GenerationConfig] = GenerationConfig(
-            **filtered_params
-        )
+        generation_config: Optional[GenerationConfig] = GenerationConfig(**filtered_params)
         data = RequestBody(contents=content)
         if system_instructions is not None:
             data["system_instruction"] = system_instructions

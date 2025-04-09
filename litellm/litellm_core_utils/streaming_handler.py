@@ -1,5 +1,6 @@
 import asyncio
 import collections.abc
+import datetime
 import json
 import threading
 import time
@@ -1373,6 +1374,10 @@ class CustomStreamWrapper:
 
                     if response is None:
                         continue
+                    if self.logging_obj.completion_start_time is None:
+                        self.logging_obj._update_completion_start_time(
+                            completion_start_time=datetime.datetime.now()
+                        )
                     ## LOGGING
                     executor.submit(
                         self.run_success_logging_and_cache_storage,
@@ -1501,6 +1506,11 @@ class CustomStreamWrapper:
                     print_verbose(f"PROCESSED ASYNC CHUNK POST CHUNK CREATOR: {processed_chunk}")
                     if processed_chunk is None:
                         continue
+
+                    if self.logging_obj.completion_start_time is None:
+                        self.logging_obj._update_completion_start_time(
+                            completion_start_time=datetime.datetime.now()
+                        )
 
                     choice = processed_chunk.choices[0]
                     if isinstance(choice, StreamingChoices):
